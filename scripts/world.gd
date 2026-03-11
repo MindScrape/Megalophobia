@@ -4,7 +4,6 @@ extends Node3D
 const CHUNK = preload("res://scenes/chunk.tscn")
 var chunks: Dictionary = {}
 
-# Called when the node enters the scene tree for the first time.
 func _ready() -> void:
 	print("Spawning World")
 	var chunk_debug = "Spawning chunks with dimensions (x=%d, y=%d, z=%d)" % [
@@ -14,24 +13,31 @@ func _ready() -> void:
 	]
 	print(chunk_debug)
 	spawn_world()
-	
+
 func spawn_world():
+	# Pass 1: create chunks and voxel data
 	for x in range(4):
 		for z in range(4):
 			var coord := Vector2i(x, z)
 			spawn_chunk(coord)
-			update_neighbors(coord)
+
+	# Pass 2: build meshes after all chunks exist
+	for chunk in chunks.values():
+		print("Generating mesh at chunk: %s" % chunk.chunk_coord)
+		chunk.generate_mesh()
 
 func spawn_chunk(coord: Vector2i):
 	if chunks.has(coord):
 		return
+
 	var chunk_instance: Chunk = CHUNK.instantiate()
 	chunk_instance.initialize(coord, self)
 	var world_x := coord.x * VoxelConstants.CHUNK_SIZE.x
 	var world_z := coord.y * VoxelConstants.CHUNK_SIZE.z
 	chunk_instance.position = Vector3(world_x, 0, world_z)
-	add_child(chunk_instance)
+
 	chunks[coord] = chunk_instance
+	add_child(chunk_instance)
 
 func update_neighbors(coord):
 	var dirs = [

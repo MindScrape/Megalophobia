@@ -3,6 +3,7 @@ class_name Chunk
 extends Node3D
 
 @onready var mesh_instance: MeshInstance3D = $MeshInstance3D
+var terrain_noise := FastNoiseLite.new() # TODO have world store this for us
 var chunk_coord: Vector2i = Vector2i.ZERO
 var world: Node = null
 var cube_mesh: ArrayMesh
@@ -36,13 +37,16 @@ const BLOCKS := {
 func initialize(coord: Vector2i, surrounding_world: Node) -> void:
 	chunk_coord = coord
 	world = surrounding_world
+	terrain_noise.seed = 12345
+	terrain_noise.frequency = 0.03
+	terrain_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX
 
 
 func _ready() -> void:
-	print("Generating chunk at coord: %s" % chunk_coord)
+	print("Generating voxel data at chunk: %s" % chunk_coord)
 	if voxels.is_empty():
 		generate_voxels()
-	generate_mesh()
+	# generate_mesh()
 	# We need to have this in the ready function of the chunk if we want to render the textures
 	if set_material_in_code and atlas_texture:
 		var shader := load("res://shaders/voxel_atlas.gdshader")
@@ -147,6 +151,9 @@ func get_voxel_safe(x:int, y:int, z:int) -> int:
 # 	mesh_instance.mesh = cube_mesh
 
 func generate_mesh():
+	mesh_instance.mesh = null
+	cube_mesh = null
+
 	var vertices: Array[Vector3] = []
 	var normals: Array[Vector3] = []
 	var uvs: Array[Vector2] = []
@@ -173,15 +180,22 @@ func generate_voxels() -> void:
 	voxels.resize(WIDTH * HEIGHT * DEPTH)
 
 	for x in range(WIDTH):
-		for y in range(HEIGHT):
-			for z in range(DEPTH):
-				# Eventually, height = noise(world_x, world_z)
-				# var world_x = chunk_coord.x * WIDTH + x
-				# var world_z = chunk_coord.y * DEPTH + z
-				if y == HEIGHT - 1:
+		for z in range(DEPTH):
+			var world_x = chunk_coord.x * WIDTH + x
+			var world_z = chunk_coord.y * DEPTH + z
+
+			var noise_value = terrain_noise.get_noise_2d(world_x, world_z)
+			var surface_height = int((noise_value + 1.0) * 0.5 * 20.0) + 20
+
+			for y in range(HEIGHT):
+				if y > surface_height:
+					set_voxel(x, y, z, VoxelBlocks.AIR)
+				elif y == surface_height:
 					set_voxel(x, y, z, VoxelBlocks.GRASS)
-				else:
+				elif y >= surface_height - 3:
 					set_voxel(x, y, z, VoxelBlocks.DIRT)
+				else:
+					set_voxel(x, y, z, VoxelBlocks.DIRT) # later replace with STONE
 
 
 func create_face(direction: Vector3, pos: Vector3, uv_coords: Array[Vector2]) -> Dictionary:
@@ -356,14 +370,8 @@ func greedy_axis(axis:int, vertices, normals, uvs, colors):
 			for k in range(dims[u]):
 				x[u] = k
 
-				var a := VoxelBlocks.AIR
-				var b := VoxelBlocks.AIR
-
-				if x[axis] >= 0:
-					a = get_voxel_safe(x[0],x[1],x[2])
-
-				if x[axis] < dims[axis]-1:
-					b = get_voxel_safe(x[0]+q[0],x[1]+q[1],x[2]+q[2])
+				var a: int = get_voxel_safe(x[0], x[1], x[2])
+				var b: int = get_voxel_safe(x[0] + q[0], x[1] + q[1], x[2] + q[2])
 
 				if (a != VoxelBlocks.AIR) != (b != VoxelBlocks.AIR):
 					mask[n] = a if a != VoxelBlocks.AIR else -b
