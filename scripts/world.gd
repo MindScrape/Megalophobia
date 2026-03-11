@@ -1,0 +1,61 @@
+@tool
+extends Node3D
+
+const CHUNK = preload("res://scenes/chunk.tscn")
+var chunks: Dictionary = {}
+
+# Called when the node enters the scene tree for the first time.
+func _ready() -> void:
+	print("Spawning World")
+	var chunk_debug = "Spawning chunks with dimensions (x=%d, y=%d, z=%d)" % [
+		VoxelConstants.CHUNK_SIZE.x,
+		VoxelConstants.CHUNK_SIZE.y,
+		VoxelConstants.CHUNK_SIZE.z
+	]
+	print(chunk_debug)
+	spawn_world()
+	
+func spawn_world():
+	for x in range(4):
+		for z in range(4):
+			var coord := Vector2i(x, z)
+			spawn_chunk(coord)
+			update_neighbors(coord)
+
+func spawn_chunk(coord: Vector2i):
+	if chunks.has(coord):
+		return
+	var chunk_instance: Chunk = CHUNK.instantiate()
+	chunk_instance.initialize(coord, self)
+	var world_x := coord.x * VoxelConstants.CHUNK_SIZE.x
+	var world_z := coord.y * VoxelConstants.CHUNK_SIZE.z
+	chunk_instance.position = Vector3(world_x, 0, world_z)
+	add_child(chunk_instance)
+	chunks[coord] = chunk_instance
+
+func update_neighbors(coord):
+	var dirs = [
+		Vector2i(1,0),
+		Vector2i(-1,0),
+		Vector2i(0,1),
+		Vector2i(0,-1)
+	]
+	for d in dirs:
+		var neighbor = get_chunk(coord + d)
+		if neighbor:
+			neighbor.generate_mesh()
+
+func world_to_chunk(pos: Vector3) -> Vector2i:
+	var cx := floori(pos.x / VoxelConstants.CHUNK_SIZE.x)
+	var cz := floori(pos.z / VoxelConstants.CHUNK_SIZE.z)
+	return Vector2i(cx, cz)
+
+func world_to_local(pos: Vector3) -> Vector3i:
+	var lx := posmod(int(pos.x), VoxelConstants.CHUNK_SIZE.x)
+	var lz := posmod(int(pos.z), VoxelConstants.CHUNK_SIZE.z)
+	return Vector3i(lx, int(pos.y), lz)
+
+func get_chunk(coord: Vector2i):
+	if chunks.has(coord):
+		return chunks[coord]
+	return null
