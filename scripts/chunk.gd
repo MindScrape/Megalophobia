@@ -45,9 +45,11 @@ func _ready() -> void:
 	generate_mesh()
 	# We need to have this in the ready function of the chunk if we want to render the textures
 	if set_material_in_code and atlas_texture:
-		var mat := StandardMaterial3D.new()
-		mat.albedo_texture = atlas_texture
-		mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
+		var shader := load("res://shaders/voxel_atlas.gdshader")
+		var mat := ShaderMaterial.new()
+		mat.shader = shader
+		mat.set_shader_parameter("atlas_texture", atlas_texture)
+		mat.set_shader_parameter("atlas_grid", Vector2(atlas_cols, atlas_rows))
 		mesh_instance.material_override = mat
 
 
@@ -93,52 +95,73 @@ func get_voxel_safe(x:int, y:int, z:int) -> int:
 	return neighbor.get_voxel(nx, y, nz)
 
 
-func generate_mesh() -> void:
-	var faces: Array = []
+# func generate_mesh() -> void:
+# 	var faces: Array = []
 
-	for x in range(WIDTH):
-		for y in range(HEIGHT):
-			for z in range(DEPTH):
-				var block_id: int = get_voxel(x,y,z)
-				if block_id == VoxelBlocks.AIR:
-					continue
+# 	for x in range(WIDTH):
+# 		for y in range(HEIGHT):
+# 			for z in range(DEPTH):
+# 				var block_id: int = get_voxel(x,y,z)
+# 				if block_id == VoxelBlocks.AIR:
+# 					continue
 
-				var pos: Vector3 = Vector3(x, y, z) * CUBE_SIZE
+# 				var pos: Vector3 = Vector3(x, y, z) * CUBE_SIZE
 
-				# Only create faces that are exposed to air
-				if get_voxel_safe(x - 1, y, z) == VoxelBlocks.AIR:
-					var t := block_tile_for_face(block_id, Vector3.LEFT)
-					faces.append(create_face(Vector3.LEFT, pos, get_tile_uvs(t.x, t.y)))
-				if get_voxel_safe(x + 1, y, z) == VoxelBlocks.AIR:
-					var t := block_tile_for_face(block_id, Vector3.RIGHT)
-					faces.append(create_face(Vector3.RIGHT, pos, get_tile_uvs(t.x, t.y)))
-				if get_voxel_safe(x, y - 1, z) == VoxelBlocks.AIR:
-					var t := block_tile_for_face(block_id, Vector3.DOWN)
-					faces.append(create_face(Vector3.DOWN, pos, get_tile_uvs(t.x, t.y)))
-				if get_voxel_safe(x, y + 1, z) == VoxelBlocks.AIR:
-					var t := block_tile_for_face(block_id, Vector3.UP)
-					faces.append(create_face(Vector3.UP, pos, get_tile_uvs(t.x, t.y)))
-				if get_voxel_safe(x, y, z - 1) == VoxelBlocks.AIR:
-					var t := block_tile_for_face(block_id, Vector3.FORWARD)
-					faces.append(create_face(Vector3.FORWARD, pos, get_tile_uvs(t.x, t.y)))
-				if get_voxel_safe(x, y, z + 1) == VoxelBlocks.AIR:
-					var t := block_tile_for_face(block_id, Vector3.BACK)
-					faces.append(create_face(Vector3.BACK, pos, get_tile_uvs(t.x, t.y)))
+# 				# Only create faces that are exposed to air
+# 				if get_voxel_safe(x - 1, y, z) == VoxelBlocks.AIR:
+# 					var t := block_tile_for_face(block_id, Vector3.LEFT)
+# 					faces.append(create_face(Vector3.LEFT, pos, get_tile_uvs(t.x, t.y)))
+# 				if get_voxel_safe(x + 1, y, z) == VoxelBlocks.AIR:
+# 					var t := block_tile_for_face(block_id, Vector3.RIGHT)
+# 					faces.append(create_face(Vector3.RIGHT, pos, get_tile_uvs(t.x, t.y)))
+# 				if get_voxel_safe(x, y - 1, z) == VoxelBlocks.AIR:
+# 					var t := block_tile_for_face(block_id, Vector3.DOWN)
+# 					faces.append(create_face(Vector3.DOWN, pos, get_tile_uvs(t.x, t.y)))
+# 				if get_voxel_safe(x, y + 1, z) == VoxelBlocks.AIR:
+# 					var t := block_tile_for_face(block_id, Vector3.UP)
+# 					faces.append(create_face(Vector3.UP, pos, get_tile_uvs(t.x, t.y)))
+# 				if get_voxel_safe(x, y, z - 1) == VoxelBlocks.AIR:
+# 					var t := block_tile_for_face(block_id, Vector3.FORWARD)
+# 					faces.append(create_face(Vector3.FORWARD, pos, get_tile_uvs(t.x, t.y)))
+# 				if get_voxel_safe(x, y, z + 1) == VoxelBlocks.AIR:
+# 					var t := block_tile_for_face(block_id, Vector3.BACK)
+# 					faces.append(create_face(Vector3.BACK, pos, get_tile_uvs(t.x, t.y)))
 
+# 	var vertices: Array[Vector3] = []
+# 	var normals: Array[Vector3] = []
+# 	var uvs: Array[Vector2] = []
+
+# 	for face in faces:
+# 		vertices.append_array(face["vertices"])
+# 		normals.append_array(face["normals"])
+# 		uvs.append_array(face["uvs"])
+
+# 	var arrays: Array = []
+# 	arrays.resize(Mesh.ARRAY_MAX)
+# 	arrays[Mesh.ARRAY_VERTEX] = PackedVector3Array(vertices)
+# 	arrays[Mesh.ARRAY_NORMAL] = PackedVector3Array(normals)
+# 	arrays[Mesh.ARRAY_TEX_UV] = PackedVector2Array(uvs)
+
+# 	cube_mesh = ArrayMesh.new()
+# 	cube_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+# 	mesh_instance.mesh = cube_mesh
+
+func generate_mesh():
 	var vertices: Array[Vector3] = []
 	var normals: Array[Vector3] = []
 	var uvs: Array[Vector2] = []
+	var colors: Array[Color] = []
 
-	for face in faces:
-		vertices.append_array(face["vertices"])
-		normals.append_array(face["normals"])
-		uvs.append_array(face["uvs"])
+	greedy_axis(0, vertices, normals, uvs, colors)
+	greedy_axis(1, vertices, normals, uvs, colors)
+	greedy_axis(2, vertices, normals, uvs, colors)
 
-	var arrays: Array = []
+	var arrays := []
 	arrays.resize(Mesh.ARRAY_MAX)
 	arrays[Mesh.ARRAY_VERTEX] = PackedVector3Array(vertices)
 	arrays[Mesh.ARRAY_NORMAL] = PackedVector3Array(normals)
 	arrays[Mesh.ARRAY_TEX_UV] = PackedVector2Array(uvs)
+	arrays[Mesh.ARRAY_COLOR] = PackedColorArray(colors)
 
 	cube_mesh = ArrayMesh.new()
 	cube_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
@@ -306,3 +329,230 @@ func get_tile_uvs(tile_x: int, tile_y: int) -> Array[Vector2]:
 		Vector2(u1, v0),
 		Vector2(u0, v0),
 	]
+
+func greedy_axis(axis:int, vertices, normals, uvs, colors):
+
+	var dims:Array[int] = [WIDTH, HEIGHT, DEPTH]
+
+	var u = (axis + 1) % 3
+	var v = (axis + 2) % 3
+
+	var x:Array[int] = [0,0,0]
+	var q:Array[int] = [0,0,0]
+
+	q[axis] = 1
+
+	var mask:Array[int] = []
+	mask.resize(dims[u] * dims[v])
+
+	for i in range(-1, dims[axis]):
+		x[axis] = i
+
+		var n = 0
+
+		for j in range(dims[v]):
+			x[v] = j
+
+			for k in range(dims[u]):
+				x[u] = k
+
+				var a := VoxelBlocks.AIR
+				var b := VoxelBlocks.AIR
+
+				if x[axis] >= 0:
+					a = get_voxel_safe(x[0],x[1],x[2])
+
+				if x[axis] < dims[axis]-1:
+					b = get_voxel_safe(x[0]+q[0],x[1]+q[1],x[2]+q[2])
+
+				if (a != VoxelBlocks.AIR) != (b != VoxelBlocks.AIR):
+					mask[n] = a if a != VoxelBlocks.AIR else -b
+				else:
+					mask[n] = 0
+
+				n += 1
+		n = 0
+
+		for j in range(dims[v]):
+			var t = 0
+			while t < dims[u]:
+
+				var c = mask[n]
+
+				if c == 0:
+					t += 1
+					n += 1
+					continue
+
+				var w = 1
+				while t+w < dims[u] and mask[n+w] == c:
+					w += 1
+
+				var h = 1
+				var done = false
+
+				while j+h < dims[v]:
+
+					for k in range(w):
+						if mask[n + k + h*dims[u]] != c:
+							done = true
+							break
+
+					if done:
+						break
+
+					h += 1
+				# Emit the quad
+				x[u] = t
+				x[v] = j
+
+				var du = [0,0,0]
+				var dv = [0,0,0]
+
+				du[u] = w
+				dv[v] = h
+
+				add_quad(vertices, normals, uvs, colors, x, du, dv, axis, c)
+				for l in range(h):
+					for k in range(w):
+						mask[n + k + l*dims[u]] = 0
+
+				t += w
+				n += w
+
+func add_quad(vertices, normals, uvs, colors, x, du, dv, axis, block_id):
+	var quad_sign := 1 if block_id > 0 else -1
+
+	var face_dir := Vector3.ZERO
+	face_dir[axis] = quad_sign
+
+	var normal := Vector3.ZERO
+	normal[axis] = -quad_sign
+
+	var p = Vector3(x[0], x[1], x[2])
+	p[axis] += 1
+	p *= CUBE_SIZE
+
+	var u_vec = Vector3(du[0], du[1], du[2]) * CUBE_SIZE
+	var v_vec = Vector3(dv[0], dv[1], dv[2]) * CUBE_SIZE
+
+	var verts = [
+		p,
+		p + u_vec,
+		p + u_vec + v_vec,
+		p + v_vec
+	]
+
+	var tile := block_tile_for_face(abs(block_id), face_dir)
+
+	# Repeat UVs across the merged quad.
+	var repeat_u: float = abs(du[0] + du[1] + du[2])
+	var repeat_v: float = abs(dv[0] + dv[1] + dv[2])
+
+	var quad_uvs = oriented_greedy_uvs(face_dir, repeat_u, repeat_v)
+
+	# Store atlas tile coords in COLOR.rg.
+	# Dividing by 255.0 matches the shader's recovery logic.
+	var tile_color := Color(tile.x / 255.0, tile.y / 255.0, 0.0, 1.0)
+
+	if quad_sign > 0:
+		vertices.append_array([
+			verts[0], verts[2], verts[1],
+			verts[0], verts[3], verts[2]
+		])
+
+		uvs.append_array([
+			quad_uvs[0], quad_uvs[2], quad_uvs[1],
+			quad_uvs[0], quad_uvs[3], quad_uvs[2]
+		])
+	else:
+		vertices.append_array([
+			verts[0], verts[1], verts[2],
+			verts[0], verts[2], verts[3]
+		])
+
+		uvs.append_array([
+			quad_uvs[0], quad_uvs[1], quad_uvs[2],
+			quad_uvs[0], quad_uvs[2], quad_uvs[3]
+		])
+
+	normals.append_array([
+		normal, normal, normal,
+		normal, normal, normal
+	])
+
+	colors.append_array([
+		tile_color, tile_color, tile_color,
+		tile_color, tile_color, tile_color
+	])
+
+
+# THE UV SHIT ISNT WORKING AND IM TIRED.
+# TODO FIX ORIENTATION OF BLOCKS.
+func make_uv_rect(w: float, h: float) -> Array[Vector2]:
+	return [
+		Vector2(0, h), # BL
+		Vector2(w, h), # BR
+		Vector2(w, 0), # TR
+		Vector2(0, 0)  # TL
+	]
+
+func rotate_uvs_ccw(uvs: Array[Vector2]) -> Array[Vector2]:
+	return [uvs[1], uvs[2], uvs[3], uvs[0]]
+
+func rotate_uvs_cw(uvs: Array[Vector2]) -> Array[Vector2]:
+	return [uvs[3], uvs[0], uvs[1], uvs[2]]
+
+func rotate_uvs_180(uvs: Array[Vector2]) -> Array[Vector2]:
+	return [uvs[2], uvs[3], uvs[0], uvs[1]]
+
+func flip_uvs_horizontal(uvs: Array[Vector2]) -> Array[Vector2]:
+	return [uvs[1], uvs[0], uvs[3], uvs[2]]
+
+func flip_uvs_vertical(uvs: Array[Vector2]) -> Array[Vector2]:
+	return [uvs[3], uvs[2], uvs[1], uvs[0]]
+
+func oriented_greedy_uvs(face_dir: Vector3, repeat_u: float, repeat_v: float) -> Array[Vector2]:
+	var base_uvs: Array[Vector2] = [
+		Vector2(0, repeat_v),
+		Vector2(repeat_u, repeat_v),
+		Vector2(repeat_u, 0),
+		Vector2(0, 0)
+	]
+
+	# var ccw_90_uvs: Array[Vector2] = [
+	# 	Vector2(0, 0),
+	# 	Vector2(0, repeat_u),
+	# 	Vector2(repeat_v, repeat_u),
+	# 	Vector2(repeat_v, 0)
+	# ]
+
+	var cw_90_uvs: Array[Vector2] = [
+		Vector2(repeat_v, repeat_u),
+		Vector2(repeat_v, 0),
+		Vector2(0, 0),
+		Vector2(0, repeat_u)
+	]
+
+	# var rot_180_uvs: Array[Vector2] = [
+	# 	Vector2(repeat_u, 0),
+	# 	Vector2(0, 0),
+	# 	Vector2(0, repeat_v),
+	# 	Vector2(repeat_u, repeat_v)
+	# ]
+
+	match face_dir:
+		Vector3.FORWARD:
+			return base_uvs
+		Vector3.BACK:
+			return base_uvs
+		Vector3.LEFT:
+			return cw_90_uvs
+		Vector3.RIGHT:
+			return cw_90_uvs
+		Vector3.UP:
+			return base_uvs
+		Vector3.DOWN:
+			return base_uvs
+		_:
+			return base_uvs

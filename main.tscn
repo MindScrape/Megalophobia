@@ -6,3 +6,6 @@
 
 [node name="World" type="Node3D" parent="." unique_id=774545897]
 script = ExtResource("1_ig7tw")
+
+[node name="Camera3D" type="Camera3D" parent="." unique_id=775760447]
+transform = Transform3D(0.46110895, 0.50679475, -0.7283802, 0.16018431, 0.7598277, 0.6300818, 0.8727655, -0.4072114, 0.26918277, -12.036309, 73.55959, 73.07311)
