@@ -16,8 +16,8 @@ func _ready() -> void:
 
 func spawn_world():
 	# Pass 1: create chunks and voxel data
-	for x in range(4):
-		for z in range(4):
+	for x in range(8):
+		for z in range(8):
 			var coord := Vector2i(x, z)
 			spawn_chunk(coord)
 

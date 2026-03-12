@@ -4,6 +4,8 @@ extends Node3D
 
 @onready var mesh_instance: MeshInstance3D = $MeshInstance3D
 var terrain_noise := FastNoiseLite.new() # TODO have world store this for us
+var cave_noise := FastNoiseLite.new() # TODO have world store this for us
+var cave_noise_2 := FastNoiseLite.new()
 var chunk_coord: Vector2i = Vector2i.ZERO
 var world: Node = null
 var cube_mesh: ArrayMesh
@@ -31,15 +33,25 @@ const FACE_SIDE := 2
 const BLOCKS := {
 	VoxelBlocks.AIR: {"name": "Air", "solid": false, "tiles": {FACE_TOP: Vector2i(0, 15), FACE_BOTTOM: Vector2i(0, 15), FACE_SIDE: Vector2i(0, 15)}},
 	VoxelBlocks.GRASS: {"name": "Grass", "solid": true, "tiles": {FACE_TOP: Vector2i(0, 0), FACE_BOTTOM: Vector2i(2, 0), FACE_SIDE: Vector2i(3, 0)}},
-	VoxelBlocks.DIRT: {"name": "Dirt", "solid": true, "tiles": {FACE_TOP: Vector2i(2, 0), FACE_BOTTOM: Vector2i(2, 0), FACE_SIDE: Vector2i(2, 0)}}
+	VoxelBlocks.DIRT: {"name": "Dirt", "solid": true, "tiles": {FACE_TOP: Vector2i(2, 0), FACE_BOTTOM: Vector2i(2, 0), FACE_SIDE: Vector2i(2, 0)}},
+	VoxelBlocks.STONE: {"name": "Stone", "solid": true, "tiles": {FACE_TOP: Vector2i(1, 0), FACE_BOTTOM: Vector2i(1, 0), FACE_SIDE: Vector2i(1, 0)}},
 }
 
 func initialize(coord: Vector2i, surrounding_world: Node) -> void:
 	chunk_coord = coord
 	world = surrounding_world
+
 	terrain_noise.seed = 12345
-	terrain_noise.frequency = 0.03
+	terrain_noise.frequency = 0.01
 	terrain_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX
+
+	cave_noise.seed = 99999
+	cave_noise.frequency = 1.0
+	cave_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX
+
+	cave_noise_2.seed = 98765
+	cave_noise_2.frequency = 1.0
+	cave_noise_2.noise_type = FastNoiseLite.TYPE_SIMPLEX
 
 
 func _ready() -> void:
@@ -184,18 +196,41 @@ func generate_voxels() -> void:
 			var world_x = chunk_coord.x * WIDTH + x
 			var world_z = chunk_coord.y * DEPTH + z
 
-			var noise_value = terrain_noise.get_noise_2d(world_x, world_z)
-			var surface_height = int((noise_value + 1.0) * 0.5 * 20.0) + 20
+			var height_noise = terrain_noise.get_noise_2d(world_x, world_z)
+			var surface_height = int((height_noise + 1.0) * 0.5 * 20.0) + 20
 
 			for y in range(HEIGHT):
 				if y > surface_height:
 					set_voxel(x, y, z, VoxelBlocks.AIR)
+
 				elif y == surface_height:
 					set_voxel(x, y, z, VoxelBlocks.GRASS)
-				elif y >= surface_height - 3:
-					set_voxel(x, y, z, VoxelBlocks.DIRT)
+
 				else:
-					set_voxel(x, y, z, VoxelBlocks.DIRT) # later replace with STONE
+					var cave_a = cave_noise.get_noise_3d(
+						(world_x + 1000.37) * 0.035,
+						(y + 2000.91) * 0.02,
+						(world_z + 3000.53) * 0.035
+					)
+
+					var cave_b = cave_noise_2.get_noise_3d(
+						(world_x + 4000.11) * 0.018,
+						(y + 5000.77) * 0.03,
+						(world_z + 6000.29) * 0.018
+					)
+
+					var cave_value = min(abs(cave_a), abs(cave_b))
+
+					var depth_factor = clamp(float(surface_height - y) / 25.0, 0.0, 1.0)
+					#var cave_threshold = lerp(0.03, 0.08, depth_factor) # Too noisy
+					var cave_threshold = lerp(0.02, 0.05, depth_factor)
+
+					if cave_value < cave_threshold and y < surface_height - 2:
+						set_voxel(x, y, z, VoxelBlocks.AIR)
+					elif y >= surface_height - 3:
+						set_voxel(x, y, z, VoxelBlocks.DIRT)
+					else:
+						set_voxel(x, y, z, VoxelBlocks.STONE)
 
 
 func create_face(direction: Vector3, pos: Vector3, uv_coords: Array[Vector2]) -> Dictionary:
