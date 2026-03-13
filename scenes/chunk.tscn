@@ -2,10 +2,13 @@
 
 [ext_resource type="Texture2D" uid="uid://ory10kto7uhe" path="res://textures/terrain_1.png" id="1_eat54"]
 [ext_resource type="Script" uid="uid://d4b2cccdknsng" path="res://scripts/chunk.gd" id="1_jtw3q"]
+[ext_resource type="Shader" uid="uid://cfddohm2fovkc" path="res://shaders/voxel_atlas.gdshader" id="3_c3gog"]
 
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_jtw3q"]
-albedo_texture = ExtResource("1_eat54")
-texture_filter = 0
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_y5xp6"]
+render_priority = 0
+shader = ExtResource("3_c3gog")
+shader_parameter/atlas_texture = ExtResource("1_eat54")
+shader_parameter/atlas_grid = Vector2(16, 16)
 
 [sub_resource type="ArrayMesh" id="ArrayMesh_c3gog"]
 _surfaces = [{
@@ -23,5 +26,9 @@ script = ExtResource("1_jtw3q")
 atlas_texture = ExtResource("1_eat54")
 
 [node name="MeshInstance3D" type="MeshInstance3D" parent="." unique_id=954719953]
-material_override = SubResource("StandardMaterial3D_jtw3q")
+material_override = SubResource("ShaderMaterial_y5xp6")
 mesh = SubResource("ArrayMesh_c3gog")
+
+[node name="StaticBody3D" type="StaticBody3D" parent="." unique_id=438709310]
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="StaticBody3D" unique_id=1855042092]

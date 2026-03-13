@@ -2,7 +2,16 @@
 
 [ext_resource type="Script" uid="uid://cmgoymhggw8gq" path="res://scripts/world.gd" id="1_ig7tw"]
 
+[sub_resource type="Environment" id="Environment_ig7tw"]
+background_mode = 1
+background_color = Color(0.5352426, 0.68628347, 1, 1)
+ambient_light_source = 2
+ambient_light_color = Color(0.76112765, 0.8414355, 0.99999994, 1)
+
 [node name="Main" type="Node3D" unique_id=252132532]
 
 [node name="World" type="Node3D" parent="." unique_id=774545897]
 script = ExtResource("1_ig7tw")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=1597844594]
+environment = SubResource("Environment_ig7tw")
