@@ -2,7 +2,11 @@
 extends Node3D
 
 const CHUNK = preload("res://scenes/chunk.tscn")
+const PLAYER = preload("res://scenes/player.tscn")
+
 var chunks: Dictionary = {}
+var player: CharacterBody3D = null
+var terrain_generator := TerrainGenerator.new()
 
 func _ready() -> void:
 	print("Spawning World")
@@ -25,13 +29,24 @@ func spawn_world():
 	for chunk in chunks.values():
 		print("Generating mesh at chunk: %s" % chunk.chunk_coord)
 		chunk.generate_mesh()
+	
+	# Spawn the player in
+	spawn_player(8, 8)
+
+
+func spawn_player(spawn_x: int, spawn_z: int) -> void:
+	player = PLAYER.instantiate()
+	add_child(player)
+	var surface_y = terrain_generator.get_surface_height(spawn_x, spawn_z)
+	player.global_position = Vector3(spawn_x, surface_y + 3, spawn_z)
+	
 
 func spawn_chunk(coord: Vector2i):
 	if chunks.has(coord):
 		return
 
 	var chunk_instance: Chunk = CHUNK.instantiate()
-	chunk_instance.initialize(coord, self)
+	chunk_instance.initialize(coord, self, terrain_generator)
 	var world_x := coord.x * VoxelConstants.CHUNK_SIZE.x
 	var world_z := coord.y * VoxelConstants.CHUNK_SIZE.z
 	chunk_instance.position = Vector3(world_x, 0, world_z)

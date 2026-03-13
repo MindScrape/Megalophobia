@@ -3,9 +3,9 @@ class_name Chunk
 extends Node3D
 
 @onready var mesh_instance: MeshInstance3D = $MeshInstance3D
-var terrain_noise := FastNoiseLite.new() # TODO have world store this for us
-var cave_noise := FastNoiseLite.new() # TODO have world store this for us
-var cave_noise_2 := FastNoiseLite.new()
+@onready var static_body: StaticBody3D = $StaticBody3D
+@onready var collision_shape: CollisionShape3D = $StaticBody3D/CollisionShape3D
+var terrain_generator: TerrainGenerator = null
 var chunk_coord: Vector2i = Vector2i.ZERO
 var world: Node = null
 var cube_mesh: ArrayMesh
@@ -31,27 +31,56 @@ const FACE_BOTTOM := 1
 const FACE_SIDE := 2
 
 const BLOCKS := {
-	VoxelBlocks.AIR: {"name": "Air", "solid": false, "tiles": {FACE_TOP: Vector2i(0, 15), FACE_BOTTOM: Vector2i(0, 15), FACE_SIDE: Vector2i(0, 15)}},
-	VoxelBlocks.GRASS: {"name": "Grass", "solid": true, "tiles": {FACE_TOP: Vector2i(0, 0), FACE_BOTTOM: Vector2i(2, 0), FACE_SIDE: Vector2i(3, 0)}},
-	VoxelBlocks.DIRT: {"name": "Dirt", "solid": true, "tiles": {FACE_TOP: Vector2i(2, 0), FACE_BOTTOM: Vector2i(2, 0), FACE_SIDE: Vector2i(2, 0)}},
-	VoxelBlocks.STONE: {"name": "Stone", "solid": true, "tiles": {FACE_TOP: Vector2i(1, 0), FACE_BOTTOM: Vector2i(1, 0), FACE_SIDE: Vector2i(1, 0)}},
+	VoxelBlocks.AIR: {
+		"name": "Air",
+		"type": "empty",
+		"collidable": false,
+		"opaque": false,
+		"tiles": {
+			FACE_TOP: Vector2i(0, 15),
+			FACE_BOTTOM: Vector2i(0, 15),
+			FACE_SIDE: Vector2i(0, 15)
+		}
+	},
+	VoxelBlocks.GRASS: {
+		"name": "Grass",
+		"type": "solid",
+		"collidable": true,
+		"opaque": true,
+		"tiles": {
+			FACE_TOP: Vector2i(0, 0),
+			FACE_BOTTOM: Vector2i(2, 0),
+			FACE_SIDE: Vector2i(3, 0)
+		}
+	},
+	VoxelBlocks.DIRT: {
+		"name": "Dirt",
+		"type": "solid",
+		"collidable": true,
+		"opaque": true,
+		"tiles": {
+			FACE_TOP: Vector2i(2, 0),
+			FACE_BOTTOM: Vector2i(2, 0),
+			FACE_SIDE: Vector2i(2, 0)
+		}
+	},
+	VoxelBlocks.STONE: {
+		"name": "Stone",
+		"type": "solid",
+		"collidable": true,
+		"opaque": true,
+		"tiles": {
+			FACE_TOP: Vector2i(1, 0),
+			FACE_BOTTOM: Vector2i(1, 0),
+			FACE_SIDE: Vector2i(1, 0)
+		}
+	}
 }
 
-func initialize(coord: Vector2i, surrounding_world: Node) -> void:
+func initialize(coord: Vector2i, surrounding_world: Node, terrain_generator: TerrainGenerator) -> void:
 	chunk_coord = coord
 	world = surrounding_world
-
-	terrain_noise.seed = 12345
-	terrain_noise.frequency = 0.01
-	terrain_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX
-
-	cave_noise.seed = 99999
-	cave_noise.frequency = 1.0
-	cave_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX
-
-	cave_noise_2.seed = 98765
-	cave_noise_2.frequency = 1.0
-	cave_noise_2.noise_type = FastNoiseLite.TYPE_SIMPLEX
+	terrain_generator = terrain_generator
 
 
 func _ready() -> void:
@@ -67,6 +96,19 @@ func _ready() -> void:
 		mat.set_shader_parameter("atlas_texture", atlas_texture)
 		mat.set_shader_parameter("atlas_grid", Vector2(atlas_cols, atlas_rows))
 		mesh_instance.material_override = mat
+
+
+func get_block_def(block_id: int) -> Dictionary:
+	return BLOCKS.get(block_id, BLOCKS[VoxelBlocks.AIR])
+
+func is_collidable(block_id: int) -> bool:
+	return get_block_def(block_id).get("collidable", false)
+
+func is_opaque(block_id: int) -> bool:
+	return get_block_def(block_id).get("opaque", false)
+
+func is_empty(block_id: int) -> bool:
+	return get_block_def(block_id).get("type", "empty") == "empty"
 
 
 func _voxel_index(x: int, y: int, z: int) -> int:
@@ -111,57 +153,6 @@ func get_voxel_safe(x:int, y:int, z:int) -> int:
 	return neighbor.get_voxel(nx, y, nz)
 
 
-# func generate_mesh() -> void:
-# 	var faces: Array = []
-
-# 	for x in range(WIDTH):
-# 		for y in range(HEIGHT):
-# 			for z in range(DEPTH):
-# 				var block_id: int = get_voxel(x,y,z)
-# 				if block_id == VoxelBlocks.AIR:
-# 					continue
-
-# 				var pos: Vector3 = Vector3(x, y, z) * CUBE_SIZE
-
-# 				# Only create faces that are exposed to air
-# 				if get_voxel_safe(x - 1, y, z) == VoxelBlocks.AIR:
-# 					var t := block_tile_for_face(block_id, Vector3.LEFT)
-# 					faces.append(create_face(Vector3.LEFT, pos, get_tile_uvs(t.x, t.y)))
-# 				if get_voxel_safe(x + 1, y, z) == VoxelBlocks.AIR:
-# 					var t := block_tile_for_face(block_id, Vector3.RIGHT)
-# 					faces.append(create_face(Vector3.RIGHT, pos, get_tile_uvs(t.x, t.y)))
-# 				if get_voxel_safe(x, y - 1, z) == VoxelBlocks.AIR:
-# 					var t := block_tile_for_face(block_id, Vector3.DOWN)
-# 					faces.append(create_face(Vector3.DOWN, pos, get_tile_uvs(t.x, t.y)))
-# 				if get_voxel_safe(x, y + 1, z) == VoxelBlocks.AIR:
-# 					var t := block_tile_for_face(block_id, Vector3.UP)
-# 					faces.append(create_face(Vector3.UP, pos, get_tile_uvs(t.x, t.y)))
-# 				if get_voxel_safe(x, y, z - 1) == VoxelBlocks.AIR:
-# 					var t := block_tile_for_face(block_id, Vector3.FORWARD)
-# 					faces.append(create_face(Vector3.FORWARD, pos, get_tile_uvs(t.x, t.y)))
-# 				if get_voxel_safe(x, y, z + 1) == VoxelBlocks.AIR:
-# 					var t := block_tile_for_face(block_id, Vector3.BACK)
-# 					faces.append(create_face(Vector3.BACK, pos, get_tile_uvs(t.x, t.y)))
-
-# 	var vertices: Array[Vector3] = []
-# 	var normals: Array[Vector3] = []
-# 	var uvs: Array[Vector2] = []
-
-# 	for face in faces:
-# 		vertices.append_array(face["vertices"])
-# 		normals.append_array(face["normals"])
-# 		uvs.append_array(face["uvs"])
-
-# 	var arrays: Array = []
-# 	arrays.resize(Mesh.ARRAY_MAX)
-# 	arrays[Mesh.ARRAY_VERTEX] = PackedVector3Array(vertices)
-# 	arrays[Mesh.ARRAY_NORMAL] = PackedVector3Array(normals)
-# 	arrays[Mesh.ARRAY_TEX_UV] = PackedVector2Array(uvs)
-
-# 	cube_mesh = ArrayMesh.new()
-# 	cube_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-# 	mesh_instance.mesh = cube_mesh
-
 func generate_mesh():
 	mesh_instance.mesh = null
 	cube_mesh = null
@@ -185,52 +176,25 @@ func generate_mesh():
 	cube_mesh = ArrayMesh.new()
 	cube_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	mesh_instance.mesh = cube_mesh
+	var trimesh_shape := cube_mesh.create_trimesh_shape()
+	collision_shape.shape = trimesh_shape
 
 
 func generate_voxels() -> void:
 	voxels = PackedInt32Array()
 	voxels.resize(WIDTH * HEIGHT * DEPTH)
 
+	if not terrain_generator:
+		terrain_generator = TerrainGenerator.new()
+
 	for x in range(WIDTH):
 		for z in range(DEPTH):
 			var world_x = chunk_coord.x * WIDTH + x
 			var world_z = chunk_coord.y * DEPTH + z
 
-			var height_noise = terrain_noise.get_noise_2d(world_x, world_z)
-			var surface_height = int((height_noise + 1.0) * 0.5 * 20.0) + 20
-
 			for y in range(HEIGHT):
-				if y > surface_height:
-					set_voxel(x, y, z, VoxelBlocks.AIR)
-
-				elif y == surface_height:
-					set_voxel(x, y, z, VoxelBlocks.GRASS)
-
-				else:
-					var cave_a = cave_noise.get_noise_3d(
-						(world_x + 1000.37) * 0.035,
-						(y + 2000.91) * 0.02,
-						(world_z + 3000.53) * 0.035
-					)
-
-					var cave_b = cave_noise_2.get_noise_3d(
-						(world_x + 4000.11) * 0.018,
-						(y + 5000.77) * 0.03,
-						(world_z + 6000.29) * 0.018
-					)
-
-					var cave_value = min(abs(cave_a), abs(cave_b))
-
-					var depth_factor = clamp(float(surface_height - y) / 25.0, 0.0, 1.0)
-					#var cave_threshold = lerp(0.03, 0.08, depth_factor) # Too noisy
-					var cave_threshold = lerp(0.02, 0.05, depth_factor)
-
-					if cave_value < cave_threshold and y < surface_height - 2:
-						set_voxel(x, y, z, VoxelBlocks.AIR)
-					elif y >= surface_height - 3:
-						set_voxel(x, y, z, VoxelBlocks.DIRT)
-					else:
-						set_voxel(x, y, z, VoxelBlocks.STONE)
+				var block_id = terrain_generator.get_block_at(world_x, y, world_z)
+				set_voxel(x, y, z, block_id)
 
 
 func create_face(direction: Vector3, pos: Vector3, uv_coords: Array[Vector2]) -> Dictionary:
