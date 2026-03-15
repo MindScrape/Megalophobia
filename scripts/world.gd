@@ -5,8 +5,11 @@ const CHUNK = preload("res://scenes/chunk.tscn")
 const PLAYER = preload("res://scenes/player.tscn")
 
 var chunks: Dictionary = {}
+var _dirty_chunks: Dictionary = {}
 var player: CharacterBody3D = null
 var terrain_generator := TerrainGenerator.new()
+
+@export var rebuild_interval: float = 0.1
 
 func _ready() -> void:
 	print("Spawning World")
@@ -30,12 +33,20 @@ func spawn_world():
 		print("Generating mesh at chunk: %s" % chunk.chunk_coord)
 		chunk.generate_mesh()
 	
+	# Start the dirty-chunk rebuild timer
+	var timer := Timer.new()
+	timer.wait_time = rebuild_interval
+	timer.autostart = true
+	timer.timeout.connect(_rebuild_dirty_chunks)
+	add_child(timer)
+
 	# Spawn the player in
 	spawn_player(8, 8)
 
 
 func spawn_player(spawn_x: int, spawn_z: int) -> void:
 	player = PLAYER.instantiate()
+	player.initialize(self)
 	add_child(player)
 	var surface_y = terrain_generator.get_surface_height(spawn_x, spawn_z)
 	player.global_position = Vector3(spawn_x, surface_y + 3, spawn_z)
@@ -53,6 +64,31 @@ func spawn_chunk(coord: Vector2i):
 
 	chunks[coord] = chunk_instance
 	add_child(chunk_instance)
+
+func set_block(chunk_coord: Vector2i, local_pos: Vector3i, block_id: int) -> void:
+	var chunk = get_chunk(chunk_coord)
+	if chunk == null:
+		return
+	chunk.set_voxel_safe(local_pos.x, local_pos.y, local_pos.z, block_id)
+	_dirty_chunks[chunk_coord] = chunk
+
+	var border_checks = [
+		[Vector2i(1, 0),  local_pos.x == VoxelConstants.CHUNK_SIZE.x - 1],
+		[Vector2i(-1, 0), local_pos.x == 0],
+		[Vector2i(0, 1),  local_pos.z == VoxelConstants.CHUNK_SIZE.z - 1],
+		[Vector2i(0, -1), local_pos.z == 0],
+	]
+	for check in border_checks:
+		if check[1]:
+			var neighbor = get_chunk(chunk_coord + check[0])
+			if neighbor:
+				_dirty_chunks[chunk_coord + check[0]] = neighbor
+
+
+func _rebuild_dirty_chunks() -> void:
+	for chunk in _dirty_chunks.values():
+		chunk.generate_mesh()
+	_dirty_chunks.clear()
 
 func update_neighbors(coord):
 	var dirs = [

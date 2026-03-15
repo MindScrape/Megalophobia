@@ -18,12 +18,70 @@ extends CharacterBody3D
 @export var gravity_vector: Vector3 = Vector3(0, -1, 0)
 @export var floor_normal: Vector3 = Vector3(0, 1, 0)
 @export var jump_vector: Vector3 = Vector3(0, 1.1, 0)
+@export var reach: float = 5.0
 
 @onready var camera: Camera3D = $Camera3D
 
+var world: Node = null					# Reference to world for block interactions, set on spawn
+var _highlight: MeshInstance3D = null	# Simple box highlight for targeted block
+var _ray_result: Dictionary = {}		# Cache raycast result for use across multiple functions in a single frame
+
+func initialize(world_node: Node) -> void:
+	world = world_node
+
+# Called when the node enters the scene tree for the first time.
 func _ready() -> void:
 	if mouse_captured:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	_create_highlight()
+
+# Called every frame
+func _process(_delta: float) -> void:
+	var space = get_world_3d().direct_space_state
+	var query = PhysicsRayQueryParameters3D.create(
+		camera.global_position,
+		camera.global_position + (-camera.global_transform.basis.z * reach)
+	)
+	query.exclude = [self]
+	_ray_result = space.intersect_ray(query)
+
+	if _ray_result.is_empty():
+		_highlight.visible = false
+		return
+
+	var nudged = _ray_result["position"] + _ray_result["normal"] * -0.01
+	_highlight.global_position = nudged.floor() + Vector3(0.5, 0.5, 0.5)
+	_highlight.visible = true
+
+func _create_highlight() -> void:
+	var st = SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_LINES)
+	var s := 0.501
+	var corners = [
+		Vector3(-s, -s, -s), Vector3( s, -s, -s),
+		Vector3( s, -s,  s), Vector3(-s, -s,  s),
+		Vector3(-s,  s, -s), Vector3( s,  s, -s),
+		Vector3( s,  s,  s), Vector3(-s,  s,  s),
+	]
+	var edges = [
+		[0,1],[1,2],[2,3],[3,0],
+		[4,5],[5,6],[6,7],[7,4],
+		[0,4],[1,5],[2,6],[3,7],
+	]
+	for e in edges:
+		st.add_vertex(corners[e[0]])
+		st.add_vertex(corners[e[1]])
+
+	var mat = StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.albedo_color = Color.BLACK
+
+	_highlight = MeshInstance3D.new()
+	_highlight.mesh = st.commit()
+	_highlight.material_override = mat
+	_highlight.top_level = true
+	_highlight.visible = false
+	add_child(_highlight)
 
 func _physics_process(delta: float) -> void:
 	var dir := Vector3.ZERO
@@ -74,3 +132,15 @@ func _unhandled_input(event: InputEvent) -> void:
 
 	if event.is_action_pressed("ui_cancel"):
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+
+	if event is InputEventMouseButton and event.pressed:
+		if event.button_index == MOUSE_BUTTON_LEFT:
+			_try_pick_block()
+
+func _try_pick_block() -> void:
+	if _ray_result.is_empty() or world == null:
+		return
+	var hit_pos = _ray_result["position"] + _ray_result["normal"] * -0.01
+	var chunk_coord = world.world_to_chunk(hit_pos)
+	var local_pos = world.world_to_local(hit_pos)
+	world.set_block(chunk_coord, local_pos, VoxelBlocks.AIR)

@@ -77,9 +77,9 @@ const BLOCKS := {
 	}
 }
 
-func initialize(coord: Vector2i, surrounding_world: Node, terrain_generator: TerrainGenerator) -> void:
+func initialize(coord: Vector2i, world_node: Node, terrain_generator: TerrainGenerator) -> void:
 	chunk_coord = coord
-	world = surrounding_world
+	world = world_node
 	terrain_generator = terrain_generator
 
 
@@ -121,6 +121,13 @@ func get_voxel(x:int,y:int,z:int) -> int:
 
 func set_voxel(x:int,y:int,z:int,val:int) -> void:
 	voxels[_voxel_index(x,y,z)] = val
+
+
+func set_voxel_safe(x: int, y: int, z: int, val: int) -> void:
+	if x < 0 or x >= WIDTH or y < 0 or y >= HEIGHT or z < 0 or z >= DEPTH:
+		printerr("set_voxel_safe: position (%d, %d, %d) out of chunk bounds" % [x, y, z])
+		return
+	set_voxel(x, y, z, val)
 
 
 func get_voxel_safe(x:int, y:int, z:int) -> int:
