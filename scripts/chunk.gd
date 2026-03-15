@@ -10,7 +10,6 @@ var chunk_coord: Vector2i = Vector2i.ZERO
 var world: Node = null
 var cube_mesh: ArrayMesh
 var voxels: PackedInt32Array
-var _is_dirty: bool = false
 
 const CUBE_SIZE: float = VoxelConstants.CUBE_SIZE
 const WIDTH: int = VoxelConstants.CHUNK_WIDTH
