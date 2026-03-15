@@ -87,7 +87,6 @@ func _ready() -> void:
 	print("Generating voxel data at chunk: %s" % chunk_coord)
 	if voxels.is_empty():
 		generate_voxels()
-	# generate_mesh()
 	# We need to have this in the ready function of the chunk if we want to render the textures
 	if set_material_in_code and atlas_texture:
 		var shader := load("res://shaders/voxel_atlas.gdshader")
@@ -96,6 +95,7 @@ func _ready() -> void:
 		mat.set_shader_parameter("atlas_texture", atlas_texture)
 		mat.set_shader_parameter("atlas_grid", Vector2(atlas_cols, atlas_rows))
 		mesh_instance.material_override = mat
+	visible = false
 
 
 func get_block_def(block_id: int) -> Dictionary:
@@ -160,18 +160,42 @@ func get_voxel_safe(x:int, y:int, z:int) -> int:
 	return neighbor.get_voxel(nx, y, nz)
 
 
-func generate_mesh():
-	mesh_instance.mesh = null
-	cube_mesh = null
+"""
+This is the main entry point for asynchronous mesh generation. It snapshots the current voxel state
+and neighboring states, then dispatches the heavy lifting to a worker thread.
+IMPORTANT: Don't modify anything in the scene tree from the worker thread!
+		   Only operate on the snapshot data and return the final mesh/shape results back to the
+		   main thread for application.
+"""
+func generate_mesh_async(on_complete: Callable) -> void:
+	# Snapshot voxel data on the main thread before dispatching.
+	# PackedInt32Array is a value type — assignment produces an independent copy.
+	var voxels_snap: PackedInt32Array = voxels  # value-type copy for thread safety
+	var neighbor_snaps: Dictionary[Vector2i, PackedInt32Array] = {}
+	if world:
+		for offset in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+			var neighbor: Chunk = world.get_chunk(chunk_coord + offset)
+			if neighbor:
+				neighbor_snaps[offset] = neighbor.voxels  # value-type copy
 
+	WorkerThreadPool.add_task(func():
+		var result = _compute_mesh_data(voxels_snap, neighbor_snaps)
+		# Once the worker thread finishes computing, we need to apply the results back on the main thread.
+		# This is crucial because we cannot modify any Node properties (like MeshInstance.mesh) from a worker thread.
+		call_deferred("_apply_mesh_data", result.mesh, result.shape, on_complete)
+	)
+
+
+# Runs on a worker thread — no Node access, operates only on snapshot data.
+func _compute_mesh_data(voxels_snap: PackedInt32Array, neighbor_snaps: Dictionary) -> Dictionary:
 	var vertices: Array[Vector3] = []
 	var normals: Array[Vector3] = []
 	var uvs: Array[Vector2] = []
 	var colors: Array[Color] = []
 
-	greedy_axis(0, vertices, normals, uvs, colors)
-	greedy_axis(1, vertices, normals, uvs, colors)
-	greedy_axis(2, vertices, normals, uvs, colors)
+	_greedy_axis_snap(0, voxels_snap, neighbor_snaps, vertices, normals, uvs, colors)
+	_greedy_axis_snap(1, voxels_snap, neighbor_snaps, vertices, normals, uvs, colors)
+	_greedy_axis_snap(2, voxels_snap, neighbor_snaps, vertices, normals, uvs, colors)
 
 	var arrays := []
 	arrays.resize(Mesh.ARRAY_MAX)
@@ -180,11 +204,101 @@ func generate_mesh():
 	arrays[Mesh.ARRAY_TEX_UV] = PackedVector2Array(uvs)
 	arrays[Mesh.ARRAY_COLOR] = PackedColorArray(colors)
 
-	cube_mesh = ArrayMesh.new()
-	cube_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-	mesh_instance.mesh = cube_mesh
-	var trimesh_shape := cube_mesh.create_trimesh_shape()
-	collision_shape.shape = trimesh_shape
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	var shape := mesh.create_trimesh_shape()
+	return {mesh = mesh, shape = shape}
+
+
+# Runs on the main thread via call_deferred.
+# We do this to safely apply the mesh and collision shape results computed from the worker thread without risking thread-related crashes or bugs.
+func _apply_mesh_data(mesh: ArrayMesh, shape: Shape3D, on_complete: Callable) -> void:
+	cube_mesh = mesh
+	mesh_instance.mesh = mesh
+	collision_shape.shape = shape
+	visible = true
+	if on_complete.is_valid():
+		on_complete.call()
+
+
+# Snapshot-aware voxel lookup: reads from PackedInt32Array copies instead of live nodes.
+func _get_voxel_snap(x: int, y: int, z: int,
+		snap: PackedInt32Array, neighbors: Dictionary) -> int:
+	if y < 0 or y >= HEIGHT:
+		return VoxelBlocks.AIR
+	if x >= 0 and x < WIDTH and z >= 0 and z < DEPTH:
+		return snap[_voxel_index(x, y, z)]
+	var offset := Vector2i(
+		-1 if x < 0 else (1 if x >= WIDTH else 0),
+		-1 if z < 0 else (1 if z >= DEPTH else 0)
+	)
+	if not neighbors.has(offset):
+		return VoxelBlocks.AIR
+	var nx := posmod(x, WIDTH)
+	var nz := posmod(z, DEPTH)
+	return neighbors[offset][_voxel_index(nx, y, nz)]
+
+
+# Mirror of greedy_axis that uses _get_voxel_snap instead of get_voxel_safe.
+func _greedy_axis_snap(axis: int, voxels_snap: PackedInt32Array, neighbor_snaps: Dictionary,
+		vertices, normals, uvs, colors) -> void:
+	var dims: Array[int] = [WIDTH, HEIGHT, DEPTH]
+	var u := (axis + 1) % 3
+	var v := (axis + 2) % 3
+	var x: Array[int] = [0, 0, 0]
+	var q: Array[int] = [0, 0, 0]
+	q[axis] = 1
+	var mask: Array[int] = []
+	mask.resize(dims[u] * dims[v])
+
+	for i in range(-1, dims[axis]):
+		x[axis] = i
+		var n := 0
+		for j in range(dims[v]):
+			x[v] = j
+			for k in range(dims[u]):
+				x[u] = k
+				var a: int = _get_voxel_snap(x[0], x[1], x[2], voxels_snap, neighbor_snaps)
+				var b: int = _get_voxel_snap(x[0] + q[0], x[1] + q[1], x[2] + q[2], voxels_snap, neighbor_snaps)
+				if (a != VoxelBlocks.AIR) != (b != VoxelBlocks.AIR):
+					mask[n] = a if a != VoxelBlocks.AIR else -b
+				else:
+					mask[n] = 0
+				n += 1
+		n = 0
+		for j in range(dims[v]):
+			var t := 0
+			while t < dims[u]:
+				var c := mask[n]
+				if c == 0:
+					t += 1
+					n += 1
+					continue
+				var w := 1
+				while t + w < dims[u] and mask[n + w] == c:
+					w += 1
+				var h := 1
+				var done := false
+				while j + h < dims[v]:
+					for k in range(w):
+						if mask[n + k + h * dims[u]] != c:
+							done = true
+							break
+					if done:
+						break
+					h += 1
+				x[u] = t
+				x[v] = j
+				var du := [0, 0, 0]
+				var dv := [0, 0, 0]
+				du[u] = w
+				dv[v] = h
+				add_quad(vertices, normals, uvs, colors, x, du, dv, axis, c)
+				for l in range(h):
+					for k in range(w):
+						mask[n + k + l * dims[u]] = 0
+				t += w
+				n += w
 
 
 func generate_voxels() -> void:
@@ -350,89 +464,6 @@ func get_tile_uvs(tile_x: int, tile_y: int) -> Array[Vector2]:
 		Vector2(u0, v0),
 	]
 
-func greedy_axis(axis:int, vertices, normals, uvs, colors):
-
-	var dims:Array[int] = [WIDTH, HEIGHT, DEPTH]
-
-	var u = (axis + 1) % 3
-	var v = (axis + 2) % 3
-
-	var x:Array[int] = [0,0,0]
-	var q:Array[int] = [0,0,0]
-
-	q[axis] = 1
-
-	var mask:Array[int] = []
-	mask.resize(dims[u] * dims[v])
-
-	for i in range(-1, dims[axis]):
-		x[axis] = i
-
-		var n = 0
-
-		for j in range(dims[v]):
-			x[v] = j
-
-			for k in range(dims[u]):
-				x[u] = k
-
-				var a: int = get_voxel_safe(x[0], x[1], x[2])
-				var b: int = get_voxel_safe(x[0] + q[0], x[1] + q[1], x[2] + q[2])
-
-				if (a != VoxelBlocks.AIR) != (b != VoxelBlocks.AIR):
-					mask[n] = a if a != VoxelBlocks.AIR else -b
-				else:
-					mask[n] = 0
-
-				n += 1
-		n = 0
-
-		for j in range(dims[v]):
-			var t = 0
-			while t < dims[u]:
-
-				var c = mask[n]
-
-				if c == 0:
-					t += 1
-					n += 1
-					continue
-
-				var w = 1
-				while t+w < dims[u] and mask[n+w] == c:
-					w += 1
-
-				var h = 1
-				var done = false
-
-				while j+h < dims[v]:
-
-					for k in range(w):
-						if mask[n + k + h*dims[u]] != c:
-							done = true
-							break
-
-					if done:
-						break
-
-					h += 1
-				# Emit the quad
-				x[u] = t
-				x[v] = j
-
-				var du = [0,0,0]
-				var dv = [0,0,0]
-
-				du[u] = w
-				dv[v] = h
-
-				add_quad(vertices, normals, uvs, colors, x, du, dv, axis, c)
-				for l in range(h):
-					for k in range(w):
-						mask[n + k + l*dims[u]] = 0
-
-				t += w
-				n += w
 
 func add_quad(vertices, normals, uvs, colors, x, du, dv, axis, block_id):
 	var quad_sign := 1 if block_id > 0 else -1

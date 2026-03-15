@@ -144,3 +144,9 @@ func _try_pick_block() -> void:
 	var chunk_coord = world.world_to_chunk(hit_pos)
 	var local_pos = world.world_to_local(hit_pos)
 	world.set_block(chunk_coord, local_pos, VoxelBlocks.AIR)
+
+
+func get_player_chunk_coord() -> Vector2i:
+	var px = floor(self.global_position.x / VoxelConstants.CHUNK_SIZE.x)
+	var pz = floor(self.global_position.z / VoxelConstants.CHUNK_SIZE.z)
+	return Vector2i(px, pz)

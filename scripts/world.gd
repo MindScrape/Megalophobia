@@ -4,12 +4,13 @@ extends Node3D
 const CHUNK = preload("res://scenes/chunk.tscn")
 const PLAYER = preload("res://scenes/player.tscn")
 
-var chunks: Dictionary = {}
-var _dirty_chunks: Dictionary = {}
+var chunks: Dictionary[Vector2i, Chunk] = {}				# (chunk-coord -> Chunk) All chunks currently in the game world, keyed by their chunk coordinates (Vector2i)
+var _dirty_chunks: Dictionary[Vector2i, Chunk] = {}			# (chunk-coord -> Chunk) A batch of chunks that the player has modified in realtime and need to be redrawn asynchronously
+var _rebuilding_chunks: Dictionary[Vector2i, bool] = {}		# (chunk-coord -> bool)  A batch of chunks that we're actively redrawing asynchronously onto the player's screen
 var player: CharacterBody3D = null
 var terrain_generator := TerrainGenerator.new()
 
-@export var rebuild_interval: float = 0.1
+@export var rebuild_interval: float = 0.01
 
 func _ready() -> void:
 	print("Spawning World")
@@ -28,11 +29,6 @@ func spawn_world():
 			var coord := Vector2i(x, z)
 			spawn_chunk(coord)
 
-	# Pass 2: build meshes after all chunks exist
-	for chunk in chunks.values():
-		print("Generating mesh at chunk: %s" % chunk.chunk_coord)
-		chunk.generate_mesh()
-	
 	# Start the dirty-chunk rebuild timer
 	var timer := Timer.new()
 	timer.wait_time = rebuild_interval
@@ -40,11 +36,15 @@ func spawn_world():
 	timer.timeout.connect(_rebuild_dirty_chunks)
 	add_child(timer)
 
-	# Spawn the player in
+	# Pass 2: build meshes asynchronously; spawn player once all are done
+	for chunk in chunks.values():
+		chunk.generate_mesh_async(func(): pass)
+	# After all chunks have been generated, we can safely spawn the player since they won't see any more chunk pop-in
 	spawn_player(8, 8)
 
 
 func spawn_player(spawn_x: int, spawn_z: int) -> void:
+	print("Spawning player at (%d, %d)" % [spawn_x, spawn_z])
 	player = PLAYER.instantiate()
 	player.initialize(self)
 	add_child(player)
@@ -52,10 +52,9 @@ func spawn_player(spawn_x: int, spawn_z: int) -> void:
 	player.global_position = Vector3(spawn_x, surface_y + 3, spawn_z)
 	
 
-func spawn_chunk(coord: Vector2i):
+func spawn_chunk(coord: Vector2i) -> void:
 	if chunks.has(coord):
 		return
-
 	var chunk_instance: Chunk = CHUNK.instantiate()
 	chunk_instance.initialize(coord, self, terrain_generator)
 	var world_x := coord.x * VoxelConstants.CHUNK_SIZE.x
@@ -64,6 +63,7 @@ func spawn_chunk(coord: Vector2i):
 
 	chunks[coord] = chunk_instance
 	add_child(chunk_instance)
+
 
 func set_block(chunk_coord: Vector2i, local_pos: Vector3i, block_id: int) -> void:
 	var chunk = get_chunk(chunk_coord)
@@ -86,21 +86,25 @@ func set_block(chunk_coord: Vector2i, local_pos: Vector3i, block_id: int) -> voi
 
 
 func _rebuild_dirty_chunks() -> void:
-	for chunk in _dirty_chunks.values():
-		chunk.generate_mesh()
+	var to_dispatch := _dirty_chunks.duplicate()
 	_dirty_chunks.clear()
+	var player_chunk = player.get_player_chunk_coord()
+	var coords := to_dispatch.keys()
+	coords.sort_custom(func(a, b):
+		return a.distance_squared_to(player_chunk) < b.distance_squared_to(player_chunk)
+	)
+	for coord in coords:
+		if _rebuilding_chunks.has(coord):
+			# Worker still actively rebuilding the chunk. Re-queue for next tick
+			_dirty_chunks[coord] = to_dispatch[coord]
+			continue
+		# Mark the current chunk as being actively rebuilt to prevent multiple workers from picking it up simultaneously
+		_rebuilding_chunks[coord] = true
+		var chunk: Chunk = to_dispatch[coord]
+		chunk.generate_mesh_async(func(): _on_chunk_rebuilt(coord))
 
-func update_neighbors(coord):
-	var dirs = [
-		Vector2i(1,0),
-		Vector2i(-1,0),
-		Vector2i(0,1),
-		Vector2i(0,-1)
-	]
-	for d in dirs:
-		var neighbor = get_chunk(coord + d)
-		if neighbor:
-			neighbor.generate_mesh()
+func _on_chunk_rebuilt(coord: Vector2i) -> void:
+	_rebuilding_chunks.erase(coord)
 
 func world_to_chunk(pos: Vector3) -> Vector2i:
 	var cx := floori(pos.x / VoxelConstants.CHUNK_SIZE.x)
