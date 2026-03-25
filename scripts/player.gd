@@ -143,6 +143,7 @@ func _try_pick_block() -> void:
 	var hit_pos = _ray_result["position"] + _ray_result["normal"] * -0.01
 	var chunk_coord = world.world_to_chunk(hit_pos)
 	var local_pos = world.world_to_local(hit_pos)
+	# print("Hit block at world ", hit_pos, " chunk ", chunk_coord, " local ", local_pos)
 	world.set_block(chunk_coord, local_pos, VoxelBlocks.AIR)
 
 
