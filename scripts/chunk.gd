@@ -10,6 +10,8 @@ var chunk_coord: Vector2i = Vector2i.ZERO
 var world: Node = null
 var cube_mesh: ArrayMesh
 var voxels: PackedInt32Array
+var _mesh_task_id: int = -1
+var _pending_delta: Dictionary = {}
 
 const CUBE_SIZE: float = VoxelConstants.CUBE_SIZE
 const WIDTH: int = VoxelConstants.CHUNK_WIDTH
@@ -77,16 +79,14 @@ const BLOCKS := {
 	}
 }
 
-func initialize(coord: Vector2i, world_node: Node, terrain_generator: TerrainGenerator) -> void:
+func initialize(coord: Vector2i, world_node: Node, terrain_gen: TerrainGenerator) -> void:
 	chunk_coord = coord
 	world = world_node
-	terrain_generator = terrain_generator
+	terrain_generator = terrain_gen
 
 
 func _ready() -> void:
-	print("Generating voxel data at chunk: %s" % chunk_coord)
-	if voxels.is_empty():
-		generate_voxels()
+	# Voxels are generated asynchronously via generate_mesh_async() — do not block here
 	# We need to have this in the ready function of the chunk if we want to render the textures
 	if set_material_in_code and atlas_texture:
 		var shader := load("res://shaders/voxel_atlas.gdshader")
@@ -96,6 +96,16 @@ func _ready() -> void:
 		mat.set_shader_parameter("atlas_grid", Vector2(atlas_cols, atlas_rows))
 		mesh_instance.material_override = mat
 	visible = false
+
+
+func _exit_tree() -> void:
+	# If a worker task is still running when this node leaves the scene tree (e.g. on
+	# application close), block until it finishes. This keeps `self` alive for the
+	# duration of the task so all instance method calls inside it remain valid.
+	if _mesh_task_id != -1:
+		WorkerThreadPool.wait_for_task_completion(_mesh_task_id)
+		_mesh_task_id = -1
+
 
 
 func get_block_def(block_id: int) -> Dictionary:
@@ -167,23 +177,37 @@ IMPORTANT: Don't modify anything in the scene tree from the worker thread!
 		   Only operate on the snapshot data and return the final mesh/shape results back to the
 		   main thread for application.
 """
-func generate_mesh_async(on_complete: Callable) -> void:
+func generate_mesh_async(on_complete: Callable, high_priority: bool=false) -> void:
 	# Snapshot voxel data on the main thread before dispatching.
 	# PackedInt32Array is a value type — assignment produces an independent copy.
-	var voxels_snap: PackedInt32Array = voxels  # value-type copy for thread safety
+	var needs_voxels := voxels.is_empty()
+	var voxels_snap: PackedInt32Array = voxels  # value-type copy for thread safety (empty if first generation)
 	var neighbor_snaps: Dictionary[Vector2i, PackedInt32Array] = {}
 	if world:
 		for offset in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
 			var neighbor: Chunk = world.get_chunk(chunk_coord + offset)
-			if neighbor:
+			if neighbor and not neighbor.voxels.is_empty():
 				neighbor_snaps[offset] = neighbor.voxels  # value-type copy
+	# Capture coord and generator for closure — safe to read from worker thread
+	var coord_snap := chunk_coord
+	var gen_snap := terrain_generator
+	var delta_snap := _pending_delta
+	_pending_delta = {}
 
-	WorkerThreadPool.add_task(func():
-		var result = _compute_mesh_data(voxels_snap, neighbor_snaps)
+	_mesh_task_id = WorkerThreadPool.add_task(func():
+		var local_voxels: PackedInt32Array
+		if needs_voxels:
+			local_voxels = _generate_voxels_pure(coord_snap, gen_snap)
+			for idx in delta_snap:
+				local_voxels[idx] = delta_snap[idx]
+		else:
+			local_voxels = voxels_snap
+		var result = _compute_mesh_data(local_voxels, neighbor_snaps)
 		# Once the worker thread finishes computing, we need to apply the results back on the main thread.
 		# This is crucial because we cannot modify any Node properties (like MeshInstance.mesh) from a worker thread.
-		call_deferred("_apply_mesh_data", result.mesh, result.shape, on_complete)
-	)
+		call_deferred("_apply_mesh_data", result.mesh, result.shape, on_complete,
+				local_voxels if needs_voxels else PackedInt32Array()),
+	high_priority, "Chunk %s mesh generation" % [chunk_coord])
 
 
 # Runs on a worker thread — no Node access, operates only on snapshot data.
@@ -212,7 +236,12 @@ func _compute_mesh_data(voxels_snap: PackedInt32Array, neighbor_snaps: Dictionar
 
 # Runs on the main thread via call_deferred.
 # We do this to safely apply the mesh and collision shape results computed from the worker thread without risking thread-related crashes or bugs.
-func _apply_mesh_data(mesh: ArrayMesh, shape: Shape3D, on_complete: Callable) -> void:
+func _apply_mesh_data(mesh: ArrayMesh, shape: Shape3D, on_complete: Callable,
+		new_voxels: PackedInt32Array = PackedInt32Array()) -> void:
+	# If this was called from a priority thread, clean it up (thread lambda is done by now).
+
+	if not new_voxels.is_empty():
+		voxels = new_voxels
 	cube_mesh = mesh
 	mesh_instance.mesh = mesh
 	collision_shape.shape = shape
@@ -299,6 +328,19 @@ func _greedy_axis_snap(axis: int, voxels_snap: PackedInt32Array, neighbor_snaps:
 						mask[n + k + l * dims[u]] = 0
 				t += w
 				n += w
+
+
+# Pure voxel generation with no side effects on self — runs on a worker thread.
+func _generate_voxels_pure(coord: Vector2i, gen: TerrainGenerator) -> PackedInt32Array:
+	var result := PackedInt32Array()
+	result.resize(WIDTH * HEIGHT * DEPTH)
+	for x in range(WIDTH):
+		for z in range(DEPTH):
+			var world_x := coord.x * WIDTH + x
+			var world_z := coord.y * DEPTH + z
+			for y in range(HEIGHT):
+				result[_voxel_index(x, y, z)] = gen.get_block_at(world_x, y, world_z)
+	return result
 
 
 func generate_voxels() -> void:

@@ -22,6 +22,7 @@ _surfaces = [{
 }]
 
 [node name="Chunk" type="Node3D" unique_id=252132532]
+visible = false
 script = ExtResource("1_jtw3q")
 atlas_texture = ExtResource("1_eat54")
 
