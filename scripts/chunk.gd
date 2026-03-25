@@ -12,6 +12,7 @@ var cube_mesh: ArrayMesh
 var voxels: PackedInt32Array
 var _mesh_task_id: int = -1
 var _priority_thread: Thread = null
+var _pending_delta: Dictionary = {}
 
 const CUBE_SIZE: float = VoxelConstants.CUBE_SIZE
 const WIDTH: int = VoxelConstants.CHUNK_WIDTH
@@ -193,11 +194,15 @@ func generate_mesh_async(on_complete: Callable) -> void:
 	# Capture coord and generator for closure — safe to read from worker thread
 	var coord_snap := chunk_coord
 	var gen_snap := terrain_generator
+	var delta_snap := _pending_delta
+	_pending_delta = {}
 
 	_mesh_task_id = WorkerThreadPool.add_task(func():
 		var local_voxels: PackedInt32Array
 		if needs_voxels:
 			local_voxels = _generate_voxels_pure(coord_snap, gen_snap)
+			for idx in delta_snap:
+				local_voxels[idx] = delta_snap[idx]
 		else:
 			local_voxels = voxels_snap
 		var result = _compute_mesh_data(local_voxels, neighbor_snaps)
@@ -221,11 +226,15 @@ func generate_mesh_on_thread(on_complete: Callable) -> void:
 				neighbor_snaps[offset] = neighbor.voxels
 	var coord_snap := chunk_coord
 	var gen_snap := terrain_generator
+	var delta_snap := _pending_delta
+	_pending_delta = {}
 	_priority_thread = Thread.new()
 	_priority_thread.start(func():
 		var local_voxels: PackedInt32Array
 		if needs_voxels:
 			local_voxels = _generate_voxels_pure(coord_snap, gen_snap)
+			for idx in delta_snap:
+				local_voxels[idx] = delta_snap[idx]
 		else:
 			local_voxels = voxels_snap
 		var result = _compute_mesh_data(local_voxels, neighbor_snaps)

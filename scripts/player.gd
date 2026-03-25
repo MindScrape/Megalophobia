@@ -133,11 +133,33 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed("ui_cancel"):
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
-	if event is InputEventMouseButton and event.pressed:
+	if event is InputEventMouseButton and event.is_pressed():
 		if event.button_index == MOUSE_BUTTON_LEFT:
-			_try_pick_block()
+			_try_destroy_block()
+		if event.button_index == MOUSE_BUTTON_RIGHT:
+			_try_place_block(VoxelBlocks.STONE)
+			
 
-func _try_pick_block() -> void:
+func _try_place_block(block_id: int) -> void:
+	if _ray_result.is_empty() or world == null:
+		return
+	var hit_pos = _ray_result["position"] + _ray_result["normal"] * 0.5
+
+	var box = BoxShape3D.new()
+	box.size = Vector3.ONE * VoxelConstants.CUBE_SIZE
+	var params = PhysicsShapeQueryParameters3D.new()
+	params.shape = box
+	params.transform = Transform3D(Basis.IDENTITY, hit_pos.floor() + Vector3(0.5, 0.5, 0.5) * VoxelConstants.CUBE_SIZE)
+	var space = get_world_3d().direct_space_state
+	for result in space.intersect_shape(params):
+		if result["collider"] == self:
+			return
+
+	var chunk_coord = world.world_to_chunk(hit_pos)
+	var local_pos = world.world_to_local(hit_pos)
+	world.set_block(chunk_coord, local_pos, block_id)
+
+func _try_destroy_block() -> void:
 	if _ray_result.is_empty() or world == null:
 		return
 	var hit_pos = _ray_result["position"] + _ray_result["normal"] * -0.01
