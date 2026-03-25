@@ -11,7 +11,6 @@ var world: Node = null
 var cube_mesh: ArrayMesh
 var voxels: PackedInt32Array
 var _mesh_task_id: int = -1
-var _priority_thread: Thread = null
 var _pending_delta: Dictionary = {}
 
 const CUBE_SIZE: float = VoxelConstants.CUBE_SIZE
@@ -106,9 +105,7 @@ func _exit_tree() -> void:
 	if _mesh_task_id != -1:
 		WorkerThreadPool.wait_for_task_completion(_mesh_task_id)
 		_mesh_task_id = -1
-	if _priority_thread != null:
-		_priority_thread.wait_to_finish()
-		_priority_thread = null
+
 
 
 func get_block_def(block_id: int) -> Dictionary:
@@ -180,7 +177,7 @@ IMPORTANT: Don't modify anything in the scene tree from the worker thread!
 		   Only operate on the snapshot data and return the final mesh/shape results back to the
 		   main thread for application.
 """
-func generate_mesh_async(on_complete: Callable) -> void:
+func generate_mesh_async(on_complete: Callable, high_priority: bool=false) -> void:
 	# Snapshot voxel data on the main thread before dispatching.
 	# PackedInt32Array is a value type — assignment produces an independent copy.
 	var needs_voxels := voxels.is_empty()
@@ -209,38 +206,8 @@ func generate_mesh_async(on_complete: Callable) -> void:
 		# Once the worker thread finishes computing, we need to apply the results back on the main thread.
 		# This is crucial because we cannot modify any Node properties (like MeshInstance.mesh) from a worker thread.
 		call_deferred("_apply_mesh_data", result.mesh, result.shape, on_complete,
-				local_voxels if needs_voxels else PackedInt32Array())
-	)
-
-
-# Same as generate_mesh_async but uses a dedicated OS Thread instead of WorkerThreadPool.
-# Used for player block edits so they never queue behind background generation tasks.
-func generate_mesh_on_thread(on_complete: Callable) -> void:
-	var needs_voxels := voxels.is_empty()
-	var voxels_snap: PackedInt32Array = voxels
-	var neighbor_snaps: Dictionary[Vector2i, PackedInt32Array] = {}
-	if world:
-		for offset in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
-			var neighbor: Chunk = world.get_chunk(chunk_coord + offset)
-			if neighbor and not neighbor.voxels.is_empty():
-				neighbor_snaps[offset] = neighbor.voxels
-	var coord_snap := chunk_coord
-	var gen_snap := terrain_generator
-	var delta_snap := _pending_delta
-	_pending_delta = {}
-	_priority_thread = Thread.new()
-	_priority_thread.start(func():
-		var local_voxels: PackedInt32Array
-		if needs_voxels:
-			local_voxels = _generate_voxels_pure(coord_snap, gen_snap)
-			for idx in delta_snap:
-				local_voxels[idx] = delta_snap[idx]
-		else:
-			local_voxels = voxels_snap
-		var result = _compute_mesh_data(local_voxels, neighbor_snaps)
-		call_deferred("_apply_mesh_data", result.mesh, result.shape, on_complete,
-				local_voxels if needs_voxels else PackedInt32Array())
-	)
+				local_voxels if needs_voxels else PackedInt32Array()),
+	high_priority, "Chunk %s mesh generation" % [chunk_coord])
 
 
 # Runs on a worker thread — no Node access, operates only on snapshot data.
@@ -272,9 +239,7 @@ func _compute_mesh_data(voxels_snap: PackedInt32Array, neighbor_snaps: Dictionar
 func _apply_mesh_data(mesh: ArrayMesh, shape: Shape3D, on_complete: Callable,
 		new_voxels: PackedInt32Array = PackedInt32Array()) -> void:
 	# If this was called from a priority thread, clean it up (thread lambda is done by now).
-	if _priority_thread != null:
-		_priority_thread.wait_to_finish()
-		_priority_thread = null
+
 	if not new_voxels.is_empty():
 		voxels = new_voxels
 	cube_mesh = mesh

@@ -1,7 +1,7 @@
 extends Node
 class_name ChunkStreamer
 
-@export var render_distance: int = 5		# The radius (in chunks) around the player within which chunks should be loaded
+@export var render_distance: int = 10	# The radius (in chunks) around the player within which chunks should be loaded
 @export var unload_buffer: int = 2		# Prevents chunks from loading when player steps past the boundary
 @export var chunks_per_frame: int = 1	# Number of chunks allowed to spawn per frame to prevent lag spikes
 @export var unloads_per_frame: int = 2	# Number of chunks allowed to unload per frame to prevent lag spikes

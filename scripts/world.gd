@@ -4,18 +4,20 @@ const CHUNK = preload("res://scenes/chunk.tscn")
 const PLAYER = preload("res://scenes/player.tscn")
 const CHUNK_STREAMER = preload("res://scripts/chunk_streamer.gd")
 const CHUNK_STORE = preload("res://scripts/chunk_store.gd")
+const DEBUG_HUD = preload("res://scripts/debug_hud.gd")
 
 var chunk_store: ChunkStore = null							# I/O storage for chunk load/save and player edit persistence
+var _streamer: ChunkStreamer = null
 var chunks: Dictionary[Vector2i, Chunk] = {}				# (chunk-coord -> Chunk) All chunks currently in the game world, keyed by their chunk coordinates (Vector2i)
 var _dirty_chunks: Dictionary[Vector2i, Chunk] = {}			# (chunk-coord -> Chunk) Background seam-repair rebuilds
 var _priority_chunks: Dictionary[Vector2i, Chunk] = {}		# (chunk-coord -> Chunk) Player block edits — dispatched before background rebuilds and immediately on rebuild completion
 var _rebuilding_chunks: Dictionary[Vector2i, bool] = {}		# (chunk-coord -> bool)  Chunks with an active worker — prevents double-dispatch of the same coord
-var _in_flight_count: int = 0								# Number of workers currently submitted to WorkerThreadPool
+var _in_flight_count: int = 0								# Background workers only — priority tasks bypass this count intentionally
 var player: CharacterBody3D = null
 var terrain_generator := TerrainGenerator.new()
 
 @export var rebuild_interval: float = 0.01
-@export var max_concurrent_rebuilds: int = 8	# Hard cap on in-flight workers — keeps the pool from flooding and ensures priority chunks wait at most one worker's duration
+@export var max_concurrent_rebuilds: int = 8	# Hard cap on the number of background threads for rebuilding the chunks
 
 func _ready() -> void:
 	chunk_store = CHUNK_STORE.new()
@@ -37,9 +39,13 @@ func _ready() -> void:
 	spawn_player(0, 0)
 
 	# Start the chunk streamer — loads/unloads chunks around the player each frame
-	var streamer := CHUNK_STREAMER.new()
-	streamer.initialize(self)
-	add_child(streamer)
+	_streamer = CHUNK_STREAMER.new()
+	_streamer.initialize(self)
+	add_child(_streamer)
+
+	var hud := DEBUG_HUD.new()
+	hud.initialize(self)
+	add_child(hud)
 
 
 func spawn_player(spawn_x: int, spawn_z: int) -> void:
@@ -83,7 +89,7 @@ func mark_chunk_for_mesh(coord: Vector2i) -> void:
 	)
 
 
-# Central dispatch gate used by _rebuild_dirty_chunks for seam and priority rebuilds.
+# Dispatch a background (seam-repair) rebuild through WorkerThreadPool.
 # Returns false if the coord is already rebuilding or the concurrent cap is reached.
 func _try_dispatch(coord: Vector2i, chunk: Chunk) -> bool:
 	if _rebuilding_chunks.has(coord):
@@ -96,13 +102,15 @@ func _try_dispatch(coord: Vector2i, chunk: Chunk) -> bool:
 	return true
 
 
-# Dispatch a player-edit rebuild on a dedicated OS thread (independent of WorkerThreadPool).
+# Dispatch a player-edit rebuild via WorkerThreadPool with high_priority=true.
+# Bypasses the concurrent rebuild cap so player edits are never queued behind background work.
+# Rate-limited naturally by _rebuilding_chunks — the same coord can't be double-dispatched.
 # Returns false only if the coord is already rebuilding.
 func _dispatch_priority(coord: Vector2i, chunk: Chunk) -> bool:
 	if _rebuilding_chunks.has(coord):
 		return false
 	_rebuilding_chunks[coord] = true
-	chunk.generate_mesh_on_thread(func(): _on_priority_rebuilt(coord))
+	chunk.generate_mesh_async(func(): _on_priority_rebuilt(coord), true)
 	return true
 
 
