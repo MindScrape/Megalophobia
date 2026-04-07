@@ -6,8 +6,8 @@ class_name ChunkStore
 #   macOS:   ~/Library/Application Support/Godot/app_userdata/<project_name>/
 const SAVE_DIR = "user://chunks/"
 
-var _cache: Dictionary = {}   # Vector2i -> Dictionary (voxel_index: int -> block_id: int)
-var _dirty: Dictionary = {}   # Vector2i -> bool
+var _cache: Dictionary = {}   # Vector3i -> Dictionary (voxel_index: int -> block_id: int)
+var _dirty: Dictionary = {}   # Vector3i -> bool
 
 func _init() -> void:
 	if OS.is_debug_build():
@@ -15,13 +15,13 @@ func _init() -> void:
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(SAVE_DIR))
 
 
-func has_data(coord: Vector2i) -> bool:
+func has_data(coord: Vector3i) -> bool:
 	if OS.is_debug_build():
 		return _cache.has(coord)
 	return _cache.has(coord) or FileAccess.file_exists(_get_path(coord))
 
 
-func get_delta(coord: Vector2i) -> Dictionary:
+func get_delta(coord: Vector3i) -> Dictionary:
 	if _cache.has(coord):
 		return _cache[coord]
 	if OS.is_debug_build():
@@ -29,14 +29,14 @@ func get_delta(coord: Vector2i) -> Dictionary:
 	return _load_from_disk(coord)
 
 
-func record_edit(coord: Vector2i, voxel_idx: int, block_id: int) -> void:
+func record_edit(coord: Vector3i, voxel_idx: int, block_id: int) -> void:
 	if not _cache.has(coord):
 		_cache[coord] = {}
 	_cache[coord][voxel_idx] = block_id
 	_dirty[coord] = true
 
 
-func flush(coord: Vector2i) -> void:
+func flush(coord: Vector3i) -> void:
 	if OS.is_debug_build() or not _dirty.get(coord, false):
 		return
 	_save_to_disk(coord, _cache[coord])
@@ -51,17 +51,17 @@ func flush_all() -> void:
 	_dirty.clear()
 
 
-func _get_path(coord: Vector2i) -> String:
-	return SAVE_DIR + str(coord.x) + "_" + str(coord.y) + ".dat"
+func _get_path(coord: Vector3i) -> String:
+	return SAVE_DIR + str(coord.x) + "_" + str(coord.y) + "_" + str(coord.z) + ".dat"
 
 
-func _save_to_disk(coord: Vector2i, delta: Dictionary) -> void:
+func _save_to_disk(coord: Vector3i, delta: Dictionary) -> void:
 	var file := FileAccess.open(_get_path(coord), FileAccess.WRITE)
 	if file:
 		file.store_var(delta)
 
 
-func _load_from_disk(coord: Vector2i) -> Dictionary:
+func _load_from_disk(coord: Vector3i) -> Dictionary:
 	var file := FileAccess.open(_get_path(coord), FileAccess.READ)
 	if file == null:
 		return {}

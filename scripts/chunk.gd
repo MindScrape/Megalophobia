@@ -6,12 +6,13 @@ extends Node3D
 @onready var static_body: StaticBody3D = $StaticBody3D
 @onready var collision_shape: CollisionShape3D = $StaticBody3D/CollisionShape3D
 var terrain_generator: TerrainGenerator = null
-var chunk_coord: Vector2i = Vector2i.ZERO
+var chunk_coord: Vector3i = Vector3i.ZERO
 var world: Node = null
 var cube_mesh: ArrayMesh
 var voxels: PackedInt32Array
 var _mesh_task_id: int = -1
 var _pending_delta: Dictionary = {}
+var _voxel_revision: int = 0
 
 const CUBE_SIZE: float = VoxelConstants.CUBE_SIZE
 const WIDTH: int = VoxelConstants.CHUNK_WIDTH
@@ -79,7 +80,7 @@ const BLOCKS := {
 	}
 }
 
-func initialize(coord: Vector2i, world_node: Node, terrain_gen: TerrainGenerator) -> void:
+func initialize(coord: Vector3i, world_node: Node, terrain_gen: TerrainGenerator) -> void:
 	chunk_coord = coord
 	world = world_node
 	terrain_generator = terrain_gen
@@ -138,36 +139,37 @@ func set_voxel_safe(x: int, y: int, z: int, val: int) -> void:
 		printerr("set_voxel_safe: position (%d, %d, %d) out of chunk bounds" % [x, y, z])
 		return
 	set_voxel(x, y, z, val)
+	_voxel_revision += 1
 
 
 func get_voxel_safe(x:int, y:int, z:int) -> int:
-	# Y outside chunk = air
-	if y < 0 or y >= HEIGHT:
-		return VoxelBlocks.AIR
-	# inside this chunk
-	if x >= 0 and x < WIDTH and z >= 0 and z < DEPTH:
-		return get_voxel(x,y,z)
-	# Currently previewing a single chunk, so no world exists...
+	# Determine if we need to cross into a neighboring chunk on any axis
+	var neighbor_coord := chunk_coord
+	var nx := x
+	var ny := y
+	var nz := z
+
+	if x < 0:        neighbor_coord.x -= 1; nx = x + WIDTH
+	elif x >= WIDTH: neighbor_coord.x += 1; nx = x - WIDTH
+
+	if y < 0:         neighbor_coord.y -= 1; ny = y + HEIGHT
+	elif y >= HEIGHT: neighbor_coord.y += 1; ny = y - HEIGHT
+
+	if z < 0:        neighbor_coord.z -= 1; nz = z + DEPTH
+	elif z >= DEPTH: neighbor_coord.z += 1; nz = z - DEPTH
+
+	# Still inside this chunk
+	if neighbor_coord == chunk_coord:
+		return get_voxel(nx, ny, nz)
+
+	# Currently previewing a single chunk, so no world exists
 	if not world:
 		return VoxelBlocks.AIR
-	# determine neighboring chunk
-	var neighbor_coord := chunk_coord
-	if x < 0:
-		neighbor_coord.x -= 1
-	elif x >= WIDTH:
-		neighbor_coord.x += 1
-
-	if z < 0:
-		neighbor_coord.y -= 1
-	elif z >= DEPTH:
-		neighbor_coord.y += 1
 
 	var neighbor = world.get_chunk(neighbor_coord)
 	if neighbor == null:
 		return VoxelBlocks.AIR
-	var nx = posmod(x, WIDTH)
-	var nz = posmod(z, DEPTH)
-	return neighbor.get_voxel(nx, y, nz)
+	return neighbor.get_voxel(nx, ny, nz)
 
 
 """
@@ -182,9 +184,11 @@ func generate_mesh_async(on_complete: Callable, high_priority: bool=false) -> vo
 	# PackedInt32Array is a value type — assignment produces an independent copy.
 	var needs_voxels := voxels.is_empty()
 	var voxels_snap: PackedInt32Array = voxels  # value-type copy for thread safety (empty if first generation)
-	var neighbor_snaps: Dictionary[Vector2i, PackedInt32Array] = {}
+	var neighbor_snaps: Dictionary[Vector3i, PackedInt32Array] = {}
+	var revision_snap := _voxel_revision
 	if world:
-		for offset in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+		for offset in [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 1, 0),
+				Vector3i(0, -1, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1)]:
 			var neighbor: Chunk = world.get_chunk(chunk_coord + offset)
 			if neighbor and not neighbor.voxels.is_empty():
 				neighbor_snaps[offset] = neighbor.voxels  # value-type copy
@@ -206,7 +210,7 @@ func generate_mesh_async(on_complete: Callable, high_priority: bool=false) -> vo
 		# Once the worker thread finishes computing, we need to apply the results back on the main thread.
 		# This is crucial because we cannot modify any Node properties (like MeshInstance.mesh) from a worker thread.
 		call_deferred("_apply_mesh_data", result.mesh, result.shape, on_complete,
-				local_voxels if needs_voxels else PackedInt32Array()),
+				local_voxels if needs_voxels else PackedInt32Array(), revision_snap),
 	high_priority, "Chunk %s mesh generation" % [chunk_coord])
 
 
@@ -237,8 +241,12 @@ func _compute_mesh_data(voxels_snap: PackedInt32Array, neighbor_snaps: Dictionar
 # Runs on the main thread via call_deferred.
 # We do this to safely apply the mesh and collision shape results computed from the worker thread without risking thread-related crashes or bugs.
 func _apply_mesh_data(mesh: ArrayMesh, shape: Shape3D, on_complete: Callable,
-		new_voxels: PackedInt32Array = PackedInt32Array()) -> void:
+		new_voxels: PackedInt32Array = PackedInt32Array(), request_revision: int = -1) -> void:
 	# If this was called from a priority thread, clean it up (thread lambda is done by now).
+	if request_revision != -1 and request_revision != _voxel_revision:
+		if on_complete.is_valid():
+			on_complete.call()
+		return
 
 	if not new_voxels.is_empty():
 		voxels = new_voxels
@@ -251,21 +259,22 @@ func _apply_mesh_data(mesh: ArrayMesh, shape: Shape3D, on_complete: Callable,
 
 
 # Snapshot-aware voxel lookup: reads from PackedInt32Array copies instead of live nodes.
+# The greedy algorithm only ever steps one axis at a time, so cx/cy/cz will have at most
+# one non-zero component — no diagonal neighbor lookups ever occur in practice.
 func _get_voxel_snap(x: int, y: int, z: int,
 		snap: PackedInt32Array, neighbors: Dictionary) -> int:
-	if y < 0 or y >= HEIGHT:
-		return VoxelBlocks.AIR
-	if x >= 0 and x < WIDTH and z >= 0 and z < DEPTH:
+	var cx := -1 if x < 0 else (1 if x >= WIDTH  else 0)
+	var cy := -1 if y < 0 else (1 if y >= HEIGHT else 0)
+	var cz := -1 if z < 0 else (1 if z >= DEPTH  else 0)
+	if cx == 0 and cy == 0 and cz == 0:
 		return snap[_voxel_index(x, y, z)]
-	var offset := Vector2i(
-		-1 if x < 0 else (1 if x >= WIDTH else 0),
-		-1 if z < 0 else (1 if z >= DEPTH else 0)
-	)
+	var offset := Vector3i(cx, cy, cz)
 	if not neighbors.has(offset):
 		return VoxelBlocks.AIR
 	var nx := posmod(x, WIDTH)
+	var ny := posmod(y, HEIGHT)
 	var nz := posmod(z, DEPTH)
-	return neighbors[offset][_voxel_index(nx, y, nz)]
+	return neighbors[offset][_voxel_index(nx, ny, nz)]
 
 
 # Mirror of greedy_axis that uses _get_voxel_snap instead of get_voxel_safe.
@@ -331,15 +340,16 @@ func _greedy_axis_snap(axis: int, voxels_snap: PackedInt32Array, neighbor_snaps:
 
 
 # Pure voxel generation with no side effects on self — runs on a worker thread.
-func _generate_voxels_pure(coord: Vector2i, gen: TerrainGenerator) -> PackedInt32Array:
+func _generate_voxels_pure(coord: Vector3i, gen: TerrainGenerator) -> PackedInt32Array:
 	var result := PackedInt32Array()
 	result.resize(WIDTH * HEIGHT * DEPTH)
 	for x in range(WIDTH):
 		for z in range(DEPTH):
 			var world_x := coord.x * WIDTH + x
-			var world_z := coord.y * DEPTH + z
+			var world_z := coord.z * DEPTH + z
 			for y in range(HEIGHT):
-				result[_voxel_index(x, y, z)] = gen.get_block_at(world_x, y, world_z)
+				var world_y := coord.y * HEIGHT + y
+				result[_voxel_index(x, y, z)] = gen.get_block_at(world_x, world_y, world_z)
 	return result
 
 
