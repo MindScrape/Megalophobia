@@ -40,6 +40,7 @@ func _process(_delta: float) -> void:
 	var player = _world.player
 	var pos: Vector3 = player.global_position if player else Vector3.ZERO
 	var chunk_coord: Vector2i = player.get_player_chunk_coord() if player else Vector2i.ZERO
+	var chunk_y: int = floori(pos.y / VoxelConstants.CHUNK_SIZE.y) if player else 0
 
 	var load_q := 0
 	var unload_q := 0
@@ -56,7 +57,7 @@ func _process(_delta: float) -> void:
 		"[color=yellow]-- debug --[/color]\n"
 		+ "fps         %d\n" % Engine.get_frames_per_second()
 		+ "pos         x=%.1f  y=%.1f  z=%.1f\n" % [pos.x, pos.y, pos.z]
-		+ "chunk       %d, %d\n" % [chunk_coord.x, chunk_coord.y]
+		+ "chunk       %d, %d, %d\n" % [chunk_coord.x, chunk_y, chunk_coord.y]
 		+ "loaded      %d\n" % _world.chunks.size()
 		+ "load queue  %d   unload  %d\n" % [load_q, unload_q]
 		+ "rebuilding  %d   in-flight  %d/%d\n" % [_world._rebuilding_chunks.size(), _world._in_flight_count, _world.max_concurrent_rebuilds]

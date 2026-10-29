@@ -8,10 +8,10 @@ const DEBUG_HUD = preload("res://scripts/debug_hud.gd")
 
 var chunk_store: ChunkStore = null							# I/O storage for chunk load/save and player edit persistence
 var _streamer: ChunkStreamer = null
-var chunks: Dictionary[Vector2i, Chunk] = {}				# (chunk-coord -> Chunk) All chunks currently in the game world, keyed by their chunk coordinates (Vector2i)
-var _dirty_chunks: Dictionary[Vector2i, Chunk] = {}			# (chunk-coord -> Chunk) Background seam-repair rebuilds
-var _priority_chunks: Dictionary[Vector2i, Chunk] = {}		# (chunk-coord -> Chunk) Player block edits — dispatched before background rebuilds and immediately on rebuild completion
-var _rebuilding_chunks: Dictionary[Vector2i, bool] = {}		# (chunk-coord -> bool)  Chunks with an active worker — prevents double-dispatch of the same coord
+var chunks: Dictionary[Vector3i, Chunk] = {}				# (chunk-coord -> Chunk) All chunks currently in the game world, keyed by their chunk coordinates (Vector3i)
+var _dirty_chunks: Dictionary[Vector3i, Chunk] = {}			# (chunk-coord -> Chunk) Background seam-repair rebuilds
+var _priority_chunks: Dictionary[Vector3i, Chunk] = {}		# (chunk-coord -> Chunk) Player block edits — dispatched before background rebuilds and immediately on rebuild completion
+var _rebuilding_chunks: Dictionary[Vector3i, bool] = {}		# (chunk-coord -> bool)  Chunks with an active worker — prevents double-dispatch of the same coord
 var _in_flight_count: int = 0								# Background workers only — priority tasks bypass this count intentionally
 var player: CharacterBody3D = null
 var terrain_generator := TerrainGenerator.new()
@@ -22,10 +22,12 @@ var terrain_generator := TerrainGenerator.new()
 func _ready() -> void:
 	chunk_store = CHUNK_STORE.new()
 	print("Spawning World")
-	print("Chunk dimensions (x=%d, y=%d, z=%d)" % [
+	print("Chunk dimensions (x=%d, y=%d, z=%d)  world_height=%d  y_chunks=%d" % [
 		VoxelConstants.CHUNK_SIZE.x,
 		VoxelConstants.CHUNK_SIZE.y,
 		VoxelConstants.CHUNK_SIZE.z,
+		VoxelConstants.WORLD_HEIGHT,
+		VoxelConstants.NUM_Y_CHUNKS,
 	])
 
 	# Start the dirty-chunk rebuild timer
@@ -57,7 +59,7 @@ func spawn_player(spawn_x: int, spawn_z: int) -> void:
 	player.global_position = Vector3(spawn_x, surface_y + 3, spawn_z)
 
 
-func spawn_chunk(coord: Vector2i) -> void:
+func spawn_chunk(coord: Vector3i) -> void:
 	if chunks.has(coord):
 		return
 	var chunk_instance: Chunk = CHUNK.instantiate()
@@ -65,8 +67,9 @@ func spawn_chunk(coord: Vector2i) -> void:
 	if chunk_store.has_data(coord):
 		chunk_instance._pending_delta = chunk_store.get_delta(coord)
 	var world_x := coord.x * VoxelConstants.CHUNK_SIZE.x
-	var world_z := coord.y * VoxelConstants.CHUNK_SIZE.z
-	chunk_instance.position = Vector3(world_x, 0, world_z)
+	var world_y := coord.y * VoxelConstants.CHUNK_SIZE.y
+	var world_z := coord.z * VoxelConstants.CHUNK_SIZE.z
+	chunk_instance.position = Vector3(world_x, world_y, world_z)
 
 	chunks[coord] = chunk_instance
 	add_child(chunk_instance)
@@ -74,7 +77,7 @@ func spawn_chunk(coord: Vector2i) -> void:
 
 # Trigger async mesh generation for a freshly spawned chunk, and dirty its
 # neighbors so seams caused by the new chunk's voxels are removed.
-func mark_chunk_for_mesh(coord: Vector2i) -> void:
+func mark_chunk_for_mesh(coord: Vector3i) -> void:
 	var chunk := get_chunk(coord)
 	if chunk == null:
 		return
@@ -91,7 +94,7 @@ func mark_chunk_for_mesh(coord: Vector2i) -> void:
 
 # Dispatch a background (seam-repair) rebuild through WorkerThreadPool.
 # Returns false if the coord is already rebuilding or the concurrent cap is reached.
-func _try_dispatch(coord: Vector2i, chunk: Chunk) -> bool:
+func _try_dispatch(coord: Vector3i, chunk: Chunk) -> bool:
 	if _rebuilding_chunks.has(coord):
 		return false
 	if _in_flight_count >= max_concurrent_rebuilds:
@@ -106,7 +109,7 @@ func _try_dispatch(coord: Vector2i, chunk: Chunk) -> bool:
 # Bypasses the concurrent rebuild cap so player edits are never queued behind background work.
 # Rate-limited naturally by _rebuilding_chunks — the same coord can't be double-dispatched.
 # Returns false only if the coord is already rebuilding.
-func _dispatch_priority(coord: Vector2i, chunk: Chunk) -> bool:
+func _dispatch_priority(coord: Vector3i, chunk: Chunk) -> bool:
 	if _rebuilding_chunks.has(coord):
 		return false
 	_rebuilding_chunks[coord] = true
@@ -114,7 +117,7 @@ func _dispatch_priority(coord: Vector2i, chunk: Chunk) -> bool:
 	return true
 
 
-func unload_chunk(coord: Vector2i) -> void:
+func unload_chunk(coord: Vector3i) -> void:
 	if _rebuilding_chunks.has(coord):
 		return  # worker thread still holds a ref; will retry on next player-chunk-change
 	var chunk := get_chunk(coord)
@@ -128,14 +131,16 @@ func unload_chunk(coord: Vector2i) -> void:
 	_dirty_neighbor_chunks(coord)  # neighbors now have exposed faces that need rebuilding
 
 
-func _dirty_neighbor_chunks(coord: Vector2i) -> void:
-	for offset in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+func _dirty_neighbor_chunks(coord: Vector3i) -> void:
+	for offset in [Vector3i(1, 0, 0), Vector3i(-1, 0, 0),
+			Vector3i(0, 1, 0), Vector3i(0, -1, 0),
+			Vector3i(0, 0, 1), Vector3i(0, 0, -1)]:
 		var neighbor := get_chunk(coord + offset)
 		if neighbor != null:
 			_dirty_chunks[coord + offset] = neighbor
 
 
-func set_block(chunk_coord: Vector2i, local_pos: Vector3i, block_id: int) -> void:
+func set_block(chunk_coord: Vector3i, local_pos: Vector3i, block_id: int) -> void:
 	var chunk = get_chunk(chunk_coord)
 	if chunk == null:
 		return
@@ -144,10 +149,12 @@ func set_block(chunk_coord: Vector2i, local_pos: Vector3i, block_id: int) -> voi
 	_priority_chunks[chunk_coord] = chunk
 
 	var border_checks = [
-		[Vector2i(1, 0),  local_pos.x == VoxelConstants.CHUNK_SIZE.x - 1],
-		[Vector2i(-1, 0), local_pos.x == 0],
-		[Vector2i(0, 1),  local_pos.z == VoxelConstants.CHUNK_SIZE.z - 1],
-		[Vector2i(0, -1), local_pos.z == 0],
+		[Vector3i( 1, 0, 0), local_pos.x == VoxelConstants.CHUNK_SIZE.x - 1],
+		[Vector3i(-1, 0, 0), local_pos.x == 0],
+		[Vector3i( 0, 0, 1), local_pos.z == VoxelConstants.CHUNK_SIZE.z - 1],
+		[Vector3i( 0, 0,-1), local_pos.z == 0],
+		[Vector3i( 0, 1, 0), local_pos.y == VoxelConstants.CHUNK_SIZE.y - 1],
+		[Vector3i( 0,-1, 0), local_pos.y == 0],
 	]
 	for check in border_checks:
 		if check[1]:
@@ -157,7 +164,7 @@ func set_block(chunk_coord: Vector2i, local_pos: Vector3i, block_id: int) -> voi
 
 
 func _rebuild_dirty_chunks() -> void:
-	var player_chunk = player.get_player_chunk_coord()
+	var player_chunk: Vector2i = player.get_player_chunk_coord()
 
 	# Priority pass: player block edits — dedicated OS thread, independent of WorkerThreadPool cap
 	var priority_to_dispatch := _priority_chunks.duplicate()
@@ -166,19 +173,20 @@ func _rebuild_dirty_chunks() -> void:
 		if not _dispatch_priority(coord, priority_to_dispatch[coord]):
 			_priority_chunks[coord] = priority_to_dispatch[coord]
 
-	# Background pass: seam repairs, sorted nearest-first
+	# Background pass: seam repairs, sorted nearest-first by XZ distance
 	var to_dispatch := _dirty_chunks.duplicate()
 	_dirty_chunks.clear()
 	var coords := to_dispatch.keys()
-	coords.sort_custom(func(a, b):
-		return a.distance_squared_to(player_chunk) < b.distance_squared_to(player_chunk)
+	coords.sort_custom(func(a: Vector3i, b: Vector3i):
+		return Vector2i(a.x, a.z).distance_squared_to(player_chunk) \
+			 < Vector2i(b.x, b.z).distance_squared_to(player_chunk)
 	)
 	for coord in coords:
 		if not _try_dispatch(coord, to_dispatch[coord]):
 			_dirty_chunks[coord] = to_dispatch[coord]
 
 
-func _on_chunk_rebuilt(coord: Vector2i) -> void:
+func _on_chunk_rebuilt(coord: Vector3i) -> void:
 	_rebuilding_chunks.erase(coord)
 	_in_flight_count -= 1
 	# Slot just opened — immediately dispatch any waiting priority edit for this coord
@@ -188,7 +196,7 @@ func _on_chunk_rebuilt(coord: Vector2i) -> void:
 		_dispatch_priority(coord, chunk)
 
 
-func _on_priority_rebuilt(coord: Vector2i) -> void:
+func _on_priority_rebuilt(coord: Vector3i) -> void:
 	_rebuilding_chunks.erase(coord)
 	# If another edit landed while we were rebuilding, dispatch it immediately
 	if _priority_chunks.has(coord):
@@ -197,21 +205,25 @@ func _on_priority_rebuilt(coord: Vector2i) -> void:
 		_dispatch_priority(coord, chunk)
 
 
-func world_to_chunk(pos: Vector3) -> Vector2i:
-	var cx := floori(pos.x / VoxelConstants.CHUNK_SIZE.x)
-	var cz := floori(pos.z / VoxelConstants.CHUNK_SIZE.z)
-	return Vector2i(cx, cz)
+func world_to_chunk(pos: Vector3) -> Vector3i:
+	return Vector3i(
+		floori(pos.x / VoxelConstants.CHUNK_SIZE.x),
+		floori(pos.y / VoxelConstants.CHUNK_SIZE.y),
+		floori(pos.z / VoxelConstants.CHUNK_SIZE.z)
+	)
 
 func world_to_local(pos: Vector3) -> Vector3i:
-	var lx := posmod(floori(pos.x), VoxelConstants.CHUNK_SIZE.x)
-	var lz := posmod(floori(pos.z), VoxelConstants.CHUNK_SIZE.z)
-	return Vector3i(lx, int(pos.y), lz)
+	return Vector3i(
+		posmod(floori(pos.x), VoxelConstants.CHUNK_SIZE.x),
+		posmod(floori(pos.y), VoxelConstants.CHUNK_SIZE.y),
+		posmod(floori(pos.z), VoxelConstants.CHUNK_SIZE.z)
+	)
 
 func _exit_tree() -> void:
 	chunk_store.flush_all()
 
 
-func get_chunk(coord: Vector2i) -> Chunk:
+func get_chunk(coord: Vector3i) -> Chunk:
 	if chunks.has(coord):
 		return chunks[coord]
 	return null
