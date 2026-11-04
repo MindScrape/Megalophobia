@@ -2,6 +2,8 @@
 
 A personal voxel exploration prototype built in **Godot 4.6 with GDScript**. Explore procedural hills and caves, break blocks, and build with stone.
 
+[Technical case study](docs/technical-case-study.md) | [Engineering fixes](docs/engineering-fixes.md)
+
 | Terrain overview | Hillside detail |
 | --- | --- |
 | ![Overview of the procedural landscape](docs/screenshots/overview.png) | ![Grass, dirt, and exposed stone on a hillside](docs/screenshots/terrain.png) |

@@ -1,0 +1,4 @@
+{
+	"busy_unload_not_retried": true,
+	"empty_chunk_emits_neighbor_owned_quads": 1
+}
