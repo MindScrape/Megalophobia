@@ -1,2 +1,5 @@
 # Normalize EOL for all files that Git considers text files.
 * text=auto eol=lf
+
+# Preserve PDF bytes and keep generated documents out of text diffs.
+*.pdf binary

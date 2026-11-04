@@ -180,10 +180,9 @@ IMPORTANT: Don't modify anything in the scene tree from the worker thread!
 		   main thread for application.
 """
 func generate_mesh_async(on_complete: Callable, high_priority: bool=false) -> void:
-	# Snapshot voxel data on the main thread before dispatching.
-	# PackedInt32Array is a value type — assignment produces an independent copy.
+	# Copy mutable data before dispatch so edits cannot change a worker's inputs.
 	var needs_voxels := voxels.is_empty()
-	var voxels_snap: PackedInt32Array = voxels  # value-type copy for thread safety (empty if first generation)
+	var voxels_snap: PackedInt32Array = voxels.duplicate()
 	var neighbor_snaps: Dictionary[Vector3i, PackedInt32Array] = {}
 	var revision_snap := _voxel_revision
 	if world:
@@ -191,11 +190,11 @@ func generate_mesh_async(on_complete: Callable, high_priority: bool=false) -> vo
 				Vector3i(0, -1, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1)]:
 			var neighbor: Chunk = world.get_chunk(chunk_coord + offset)
 			if neighbor and not neighbor.voxels.is_empty():
-				neighbor_snaps[offset] = neighbor.voxels  # value-type copy
+				neighbor_snaps[offset] = neighbor.voxels.duplicate()
 	# Capture coord and generator for closure — safe to read from worker thread
 	var coord_snap := chunk_coord
 	var gen_snap := terrain_generator
-	var delta_snap := _pending_delta
+	var delta_snap := _pending_delta.duplicate()
 	_pending_delta = {}
 
 	_mesh_task_id = WorkerThreadPool.add_task(func():
