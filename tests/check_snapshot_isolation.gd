@@ -1,5 +1,6 @@
 # A semaphore holds the worker until live data is changed on the main thread.
 # Tests the actual generate_mesh_async snapshot boundary, without mesh-server calls.
+# Run: godot --headless --path . --script tests/check_snapshot_isolation.gd
 extends SceneTree
 
 class SnapshotWorld extends Node:
@@ -33,13 +34,11 @@ class SnapshotChunk extends Chunk:
 			on_complete.call()
 
 var failures: Array[String] = []
-var checks: Array[Dictionary] = []
 
 func _initialize() -> void:
 	call_deferred("_run")
 
 func _expect(condition: bool, description: String) -> void:
-	checks.append({"description":description,"passed":condition})
 	print(("PASS " if condition else "FAIL ") + description)
 	if not condition:
 		failures.append(description)
@@ -82,7 +81,4 @@ func _run() -> void:
 	_expect(fresh._pending_delta.is_empty(), "pending delta is consumed by the request")
 	fresh.free()
 	print("Snapshot isolation: %d failed checks" % failures.size())
-	var file := FileAccess.open("res://docs/case-study/snapshot-isolation.json",FileAccess.WRITE)
-	file.store_string(JSON.stringify({"checks":checks,"failed":failures.size(),"scope":"Actual worker inputs held by a semaphore until the main thread mutates live values; mesh-server calls replaced by a test double."},"\t")+"\n")
-	file.close()
 	quit(1 if not failures.is_empty() else 0)

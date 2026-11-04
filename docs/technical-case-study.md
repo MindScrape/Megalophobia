@@ -40,7 +40,7 @@ A semaphore-controlled worker regression passes all five checks after the copy f
 
 **Tradeoff:** Snapshot copies add allocation and main-thread work. These checks cover specific interleavings; worker lifecycle and shutdown still need hardening.
 
-Code: [Async mesh path](../scripts/chunk.gd), [Snapshot regression](case-study/check_snapshot_isolation.gd).
+Code: [Async mesh path](../scripts/chunk.gd), [Snapshot regression](../tests/check_snapshot_isolation.gd).
 
 ### 4 Persist changes to a reproducible world
 
@@ -50,32 +50,22 @@ Fixed seeds regenerate the base terrain. Storage records edited voxel indices an
 
 The storage helpers were exercised directly with temporary files. Normal debug gameplay disables disk saves; release-mode save and failure recovery are separate validation work.
 
-**Tradeoff:** Save failures currently clear dirty state, and the edit cache has no eviction policy. Both are tracked in the engineering backlog.
+**Tradeoff:** Save failures currently clear dirty state, and the edit cache has no eviction policy. These need separate reliability and memory work.
 
-Code: [Chunk storage](../scripts/chunk_store.gd), [Storage fixture](case-study/storage_fixture.gd).
+Code: [Chunk storage](../scripts/chunk_store.gd).
 
-## Measurements and reproduction
+## Measurement notes
 
 Controlled local fixtures on Apple M4, Godot 4.6.1-stable (official), debug build. The procedural sample at (-1, 1, 0) took 15.49 ms median and 15.72 ms p95 across 30 measured runs after three warmups. This times only the three greedy axis passes and output arrays; it excludes voxel generation, mesh upload, collision, and rendering.
 
 These results cover controlled fixtures, not a gameplay frame-time or memory benchmark. The screenshots are instrumented Godot demonstrations generated from those results; the scheduler uses a request-recording world, and revision completion order is injected deliberately.
 
-[Raw measurements](case-study/measurements.json), [snapshot checks](case-study/snapshot-isolation.json), and the [source manifest](case-study/source-manifest.json) identify the evidence. The source fingerprints identify the exact game files used by these fixtures. Regenerating the results after changing terrain or streaming settings will produce a new source manifest and may change the measurements.
-
-From the repository root, using Godot 4.6.1:
+The fix includes a focused regression check. Run it from the repository root with Godot 4.6.1:
 
 ```sh
-godot --headless --path . --script docs/case-study/check_snapshot_isolation.gd
-godot --headless --path . --script docs/case-study/measure.gd
-godot --headless --path . --script docs/case-study/check_review_findings.gd
-godot --path . --script docs/case-study/capture.gd --resolution 1280x520
-python3 docs/case-study/build_document.py
+godot --headless --path . --script tests/check_snapshot_isolation.gd
 ```
-
-The PDF builder uses ReportLab and Pillow, plus Arial fonts from macOS. Run the measurement step before the graphical capture; storage fixtures use disposable files under `/private/tmp/megalophobia-case-study/`.
 
 ## Remaining work
 
-Next: empty-mesh handling, reliable unload retries, boundary-face ownership, complete task cleanup, and failed-save recovery. These are tracked with verification criteria in the engineering backlog.
-
-[Prioritized engineering fixes](engineering-fixes.md)
+Next: empty-mesh handling, reliable unload retries, boundary-face ownership, complete task cleanup, and failed-save recovery.
